@@ -28,8 +28,8 @@ Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$30
 ; Memory Locations
 VERB_ID     = $00               ; Verb ID
 ITEM_ID     = $01               ; Item ID
-INVENTORY   = $02               ; Inventory (2 bytes) 
-PATTERN     = $a4               ; Pattern (2 bytes) 
+PATTERN     = $02               ; Pattern (2 bytes) 
+INVENTORY   = $a4               ; Inventory (2 bytes) 
 CURR_ROOM   = $a6               ; Current room
 END_ITEM    = $a7               ; Index of end of item list
 ACT_RESULT  = $a8               ; At least one action had a result
@@ -89,12 +89,16 @@ Init:       ldx #0              ; Copy initial room location data to
             jsr PrintMsg        ; ,,
             ldx CURR_ROOM       ; Show room name before game starts
             jmp RoomName        ; ,,
-     
+                 
 ; Verb Not Found
 ; Show an error message, then go back for another command 
-Nonsense:   lda BUFFER+1        ; If the player just hit RETURN, then
-            beq skip_lf         ;   no need to show an error
-            lda #<NoVerbTx      ; Show the error
+Nonsense:   lda BUFFER+1        ; Potentially process a shortcut if
+            bne ShowErr         ;   only one character
+            lda BUFFER          ; If the player just hit RETURN, then
+            cmp #' '            ;   there's no need to show an error
+            beq skip_lf         ;   ,,
+shortcuts:  jmp ShortGo
+ShowErr:    lda #<NoVerbTx      ; Show the error
             ldy #>NoVerbTx      ; ,,
             jsr PrintMsg        ; ,,
             ; Fall through to GetInput
@@ -178,7 +182,7 @@ success:    sec                 ; SUCCESS!
 game_over:  lda #<GameOverTx    ; If From=0 and To=0 then game over
             ldy #>GameOverTx    ;   Display the Game Over message,
             jsr PrintMsg        ;   ,,
-            jsr CHRIN           ;   Then wait
+forever:    jmp forever         ;   Then wait
             jmp Init            ; Start the game over
 move_pl:    sta CURR_ROOM       ; Set current room specified by To ID
             jmp next_act        ; Then continue processing actions
@@ -225,7 +229,9 @@ next_act2:  jmp next_act        ;   Check next action
 ;   - GET
 ;   - DROP   
 ;   - INVENTORY
-PostAction: lda VERB_ID
+PostAction: bit ACT_RESULT
+            bmi post_r
+            lda VERB_ID
             cmp #GO_CMD
             bne ch_look
             jmp DoGo
@@ -240,8 +246,6 @@ ch_inv:     cmp #INV_CMD
             jmp ShowInv
 ch_drop:    cmp #DROP_CMD
             beq DoDrop
-            bit ACT_RESULT
-            bmi post_r
             jmp Nonsense
 post_r:     jmp GetInput
 
@@ -268,7 +272,7 @@ drop_now:   tax
 ; Do Look                        
 DoLook:     lda ITEM_ID
             bne look_item
-show_room:  ldx CURR_ROOM
+ShortRoom:  ldx CURR_ROOM
             lda RoomTxtH-1,x
             tay
             lda RoomTxtL-1,x
@@ -336,8 +340,8 @@ ok_show:    lda ItemTxtH-1,x
 DoGo:       ldx #0
             jsr GetPattern
             jsr GetPattern
-            ldx CURR_ROOM
             lda PATTERN
+ShortGo:    ldx CURR_ROOM
             cmp #'N'
             bne try_east
             lda RoomN-1,x
@@ -351,7 +355,7 @@ try_south:  cmp #'S'
             lda RoomS-1,x
             jmp move
 try_west:   cmp #'W'
-            bne go_fail
+            bne invalid
             lda RoomW-1,x
 move:       beq go_fail
             sta CURR_ROOM
@@ -369,8 +373,9 @@ RoomName:   lda #COL_ROOM
             bne return
             lda #1
             sta SEEN_ROOMS-1,x
-            jmp show_room
+            jmp ShortRoom
 return:     jmp GetInput
+invalid:    jmp ShowErr         ; Like Nonsense, but don't look at shortcuts
 go_fail:    lda #<NoPathTx
             ldy #>NoPathTx
 PrintRet:   jsr PrintMsg
@@ -438,10 +443,14 @@ GetPattern: lda BUFFER,x        ; Trim leading spaces by ignoring them
             cmp #SPACE          ; ,,
             beq GetPattern      ; ,,
             sta PATTERN         ; Put the first character into the pattern
+            sta PATTERN+1       ; ,,
 -loop:      lda BUFFER,x        ; Get subsequent characters until we hit a
-            sta PATTERN+1       ;   space or end of string, storing each in
-            inx                 ;   the second pattern byte, which wil be
-            lda BUFFER,x        ;   the last character of a verb or item
+            beq pattern_r       ;   space or end of string, storing each in
+            cmp #' '            ;   the second pattern byte, which will be
+            beq pattern_r       ;   the final character of a verb or item
+            sta PATTERN+1       ;   ,,
+            inx                 ;   ,,
+            lda BUFFER,x        ;   ,,
             beq pattern_r       ;   ,,
             cmp #SPACE          ;   ,,
             bne loop            ;   ,,
@@ -464,7 +473,9 @@ next_verb:  iny                 ; Otherwise, try the next verb
             bne loop            ;   If not, try next verb
             clc                 ; Set error condition
             rts                 ; At end of list, return with carry clear
-verb_found: sty VERB_ID         ; Set VerbID, set carry, and return
+verb_found: lda VerbID-1,y      ; Cross-reference VerbID to handle synonyms
+            tay                 ; ,,
+            sty VERB_ID         ; Set VerbID, set carry, and return
             sec                 ; ,,
             rts                 ; ,,
             
@@ -546,9 +557,15 @@ Linefeed:   lda #LF
 ; TEST GAME DATA
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;   
 ; Verbs - By First and Last Character
-; GO, LooK, GeT, DroP, InventorY, OpeN, SummoN, TeleporT, DrinK
-Verb1:      .byte "G","L","G","D","I","O","S","T","D",EOL
-VerbL:      .byte "O","K","T","P","Y","N","N","T","K",EOL
+;   VerbID - Cross-referenced ID list for verb synonyms
+; Basic - GO (MovE), LooK (L), GeT (TakE), DroP, InventorY (I)
+; Extended - OpeN, UnlocK, SummoN, TeleporT, DrinK
+Verb1:      .byte "G","M","L","L","G","T","D","I","I"     ; Basic Verbs
+            .byte "O","S","T","D","U",EOL
+VerbL:      .byte "O","E","K","L","T","E","P","Y","I"     ; Basic Verbs
+            .byte "N","N","T","K","K",EOL
+VerbID:     .byte 1,1,2,2,3,3,4,5,5                       ; Basic Verbs
+            .byte 6,7,8,9,6,EOL
 
 ; Items
 ;   Item1    - First Character
