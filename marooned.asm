@@ -46,6 +46,7 @@ TEMP        = $a9               ; Temporary value (3 bytes)
 FROM_ID     = $a9               ; From ID during transform
 TO_ID       = $aa               ; To ID during transform
 TIMER       = $ac               ; Game timer
+RM          = $ad               ; Room address (2 bytes)
 BUFFER      = $0220             ; Input buffer
 SEEN_ROOMS  = $0340             ; Marked as 1 when entered
 ITEM_ROOMS  = $0360             ; RAM storage for item rooms
@@ -121,7 +122,7 @@ start:      ldx #0              ;
             jsr PrintMsg        ; ,,            
             ldx #1              ; Initialize starting room id
             stx CURR_ROOM       ; ,,
-            jmp RoomName        ; Show room name before game starts
+            jmp ShowRmN         ; Show room name before game starts
                  
 ; Verb Not Found
 ; Show an error message, then go back for another command 
@@ -314,34 +315,25 @@ drop_now:   tax                 ; X is the item index
 DoLook:     lda ITEM_ID         ; Get the current item id
             beq ShortRoom       ; If there's an item id, then interpret LOOK
             jmp look_item       ;   as a request to look at that item
-ShortRoom:  ldx CURR_ROOM       ; Otherwise, look at the current room
-            lda RoomTxtH-1,x    ; Show the room description
-            tay                 ; ,,
-            lda RoomTxtL-1,x    ; ,,
-            jsr PrintAlt        ; ,,
+ShortRoom:  jsr RoomName
+            jsr PrintAlt
             ; Directional display
-show_dir:   lda #RVS_ON         ; Reverse on
+show_dir:   jsr SetRmAddr       ; Get room address to (RM)
+            ldy #5              ; 5 is room index for North parameter
+-loop:      lda (RM),y          ; Get room id for room in this direction
+            beq next_dir        ; Is there a room that way?
+            lda #RVS_ON         ; Reverse on
             jsr CHROUT           ; ,,
-            ldy CURR_ROOM       ; Y is the current room id
-add_north:  lda RoomN-1,y       ;   Does it go North?
-            beq add_south       ;     If not, check South
-            lda #'n'            ;   Add N to display
-            jsr CHROUT          ;   ,,
-add_south:  lda RoomS-1,y       ;   Does it go South?
-            beq add_west        ;     If not, check West
-            lda #'s'            ;   Add S to display
-            jsr CHROUT          ;   ,,
-add_west:   lda RoomW-1,y       ;   Does it go West?
-            beq add_east        ;     If not, check East
-            lda #'w'            ;   Add W to display
-            jsr CHROUT          ;   ,,
-add_east:   lda RoomE-1,y       ;   Does it go East?
-            beq dir_end         ;     If not, finish directional display
-            lda #'e'            ;   Add W to display
-            jsr CHROUT          ;   ,,
-dir_end:    lda #RVS_OFF        ; Reverse off
+            lda Directions,y    ; If so, get the character
+            ora #$80            ;   make it uppercase
+            jsr CHROUT          ;   and print it
+            lda #RVS_OFF        ; Reverse off
             jsr CHROUT          ; ,,
-            jsr Linefeed        ; 2 x Linefeed  
+            lda #' '
+            jsr CHROUT          
+next_dir:   dey                 ; Get next direction
+            bpl loop            ;   until done            
+dir_end:    jsr Linefeed        ; 2 x Linefeed  
             jsr Linefeed        ; ,,  
             ; Item display
             lda #COL_ITEM       ; Set item color
@@ -385,49 +377,37 @@ ok_show:    lda ItemTxtH-1,x    ; Show the description of the item
 look_r:     jmp Main            ; Return to Main routine
 
 ; Do Go           
-DoGo:       ldx #0
-            jsr GetPattern
-            jsr GetPattern
-            lda PATTERN
-ShortGo:    ldx CURR_ROOM
-            cmp #'N'
-            bne try_east
-            lda RoomN-1,x
-            jmp move
-try_east:   cmp #'E'
-            bne try_south
-            lda RoomE-1,x
-            jmp move
-try_south:  cmp #'S'
-            bne try_west
-            lda RoomS-1,x
-            jmp move
-try_west:   cmp #'W'
-            bne invalid
-            lda RoomW-1,x
-move:       beq go_fail
-            sta CURR_ROOM
-            tax
-RoomName:   lda #COL_ROOM
-            jsr CHROUT
-            jsr Linefeed
-            lda RoomTxtH-1,x
-            tay
-            lda RoomTxtL-1,x
-            jsr PrintMsg
-            ldx CURR_ROOM
-            lda SEEN_ROOMS-1,x
-            bne return
-            lda #1
-            sta SEEN_ROOMS-1,x
-            jsr NormCol         ; Reset to normal color            
-            jmp ShortRoom
-return:     jmp Main    
+DoGo:       ldx #0              ; Starting from the first character,
+            jsr GetPattern      ;   skip the first pattern (GO/MOVE)
+            jsr GetPattern      ;   and get the second
+ShortGo     jsr SetRmAddr       ; Get room address to (RM)
+            ldy #5              ; 5 is room index for North parameter
+-loop:      lda Directions,y    ; A is character for direction
+            cmp PATTERN         ; Is this the attempted direction?
+            beq try_move        ;   If so, try moving that way
+            dey                 ; Get next direction
+            bpl loop            ;   until done
+            bmi invalid         ; Direction name not found
+try_move:   lda (RM),y          ; Get the room id at the found index
+            beq go_fail         ; Player is going an invalid direction
+            sta CURR_ROOM       ; But if direction is valid, set room
+ShowRmN:    lda #COL_ROOM       ; Always show room name after move
+            jsr CHROUT          ; ,,
+            jsr Linefeed        ; ,,
+            jsr RoomName        ; ,,
+            jsr PrintMsg        ; ,,
+            ldx CURR_ROOM       ; Is this the first time this room has been
+            lda SEEN_ROOMS-1,x  ;   visited?
+            bne go_r            ; Already been visitied, so show only name
+            lda #1              ; Otherwise, flag the room as seen, and
+            sta SEEN_ROOMS-1,x  ;   show everything else (description, items,
+            jsr NormCol         ;   directional display)
+            jmp ShortRoom       ;   ,,
 invalid:    jmp ShowErr         ; Like Nonsense, but don't look at shortcuts
-go_fail:    lda #<NoPathTx
-            ldy #>NoPathTx
-PrintRet:   jsr PrintMsg
-            jmp Main    
+go_fail:    lda #<NoPathTx      ; Show "no path" message and return to Main
+            ldy #>NoPathTx      ; ,,
+PrintRet:   jsr PrintMsg        ; ,,
+go_r:       jmp Main    
 
 ; Do Get            
 DoGet:      lda ITEM_ID
@@ -573,6 +553,38 @@ GetItemID:  ldy #0              ; Item index
 item_found: sty ITEM_ID         ; Item has been found. Set ItemID and return
 itemid_r:   rts                 ; ,,
 
+; Set Room Address
+; Find current room's starting data address and store it in (RM)
+SetRmAddr:  lda #<Rooms         ; Set starting room address
+            sta RM              ; ,,
+            lda #>Rooms         ; ,,
+            sta RM+1            ; ,,
+            ldx CURR_ROOM       ; X = room id
+            dex                 ; zero-index it
+            beq setaddr_r       ; if first room, (RM) is already set
+-loop:      lda #8              ; Add 8 for each id
+            clc                 ; ,,
+            adc RM              ; ,,
+            sta RM              ; ,,
+            bcc nc1             ; ,,
+            inc RM+1            ; ,,
+nc1:        dex                 ; ,,
+            bne loop            ; Multiply
+setaddr_r:  rts
+
+; Set Room Name
+; Set up A and Y for room description display. This should be followed by
+; PrintAlt (for name), or PrintMsg (for description)         
+RoomName:   jsr SetRmAddr       ; Get room address to (RM)
+            ldy #6              ; 6 = low byte parameter
+            lda (RM),y          ; A is low byte
+            pha                 ; Push low byte to stack
+            iny                 ; 7 = high byte parameter
+            lda (RM),y          ; A is high byte
+            tay                 ; Y is now high byte (for PrintMsg)
+            pla                 ; A is now low byte (for PrintMsg)
+            rts
+            
 ; Print Alternate Message
 ; Given the Message address (A, Y), look for the EOL+1, then print from there
 PrintAlt:   sta PATTERN
@@ -614,6 +626,8 @@ Linefeed:   lda #LF
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; TEST GAME DATA
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;   
+Directions: .asc 'NESWUD'
+
 ; Text - Game Messages, Errors, etc.
 Intro:      .asc 147,COL_NORM,"tHE SUN BEATS DOWN",LF,"ON YOU. yOU DON'T",LF
             .asc "REMEMBER MUCH, BUT",LF,"CLEARLY YOU MADE",LF
@@ -643,21 +657,17 @@ VerbID:     .byte 1,1,2,2,3,3,4,5,5                       ; Basic Verbs
             .byte 6,7,8,9,10,11,11,12,12,13
 
 ; Rooms
-;   RoomN    - Room ID to the North
-;   RoomE    - Room ID to the East
-;   RoomW    - Room ID to the West
-;   RoomS    - Room ID to the South
-;   RoomTxt  - Address of room name and description
-;   (The room name is terminated by EOL, after which is the room description,
-;    also terminated by EOL)
-RoomN:      .byte 0, 1, 0, 0, 0, 0,EOL
-RoomE:      .byte 4, 0, 2, 0, 6, 0,EOL
-RoomS:      .byte 2, 0, 0, 0, 0, 0,EOL
-RoomW:      .byte 0, 3, 0, 1, 0, 5,EOL
-RoomTxtL:   .byte <RNIsland,<RDock,<RWIsland,<REIsland,<RAft,<RFore
-RoomTxtH:   .byte >RNIsland,>RDock,>RWIsland,>REIsland,>RAft,>RFore
+;     North, East, South, West, Up, Down, Desc. Low Addr, Desc. High Addr
+Rooms:      .byte 0,4,2,0,0,0,<RNIsland,>RNIsland
+            .byte 1,0,0,3,0,0,<RDock,>RDock
+            .byte 0,2,0,0,0,0,<RWIsland,>RWIsland
+            .byte 0,0,0,1,0,0,<REIsland,>REIsland
+            .byte 0,6,0,0,0,0,<RAft,>RAft
+            .byte 0,0,0,5,0,0,<RFore,>RFore
 
-; Rooms
+; Room Descriptions
+;     The room name is terminated by EOL, after which is the room description,
+;     also terminated by EOL
 RNIsland:   .asc "iSLAND - nORTH",EOL,"wHEN THEY TALK ABOUT",LF
             .asc "A 'DESERTED ISLAND,'",LF,"THEY MEAN THIS.",LF,LF
             .asc "tHE HORIZON IS BEREFT",LF,"OF BUT BRINY DEEP.",EOL
@@ -697,7 +707,7 @@ ItemTxtL:   .byte <IRum,<IBottle,<IChestL,<IChestO,<IDjinn,<ISand,<ILamp
 ItemTxtH:   .byte >IRum,>IBottle,>IChestL,>IChestO,>IDjinn,>ISand,>ILamp
             .byte >IShovel,>IKey,>IAnchor,>IBoat,>IShoe,0,EOL
 
-; Items
+; Item Descriptions
 IRum:       .asc "bOTTLE OF rum",EOL,"wELL, SO YOUR CREW",LF,"WASN'T TOTALLY CRUEL",EOL
 IBottle:    .asc "eMPTY bottle",EOL,"iT ONCE HELD MEDIOCRE",LF,"RUM, NOW BONE DRY",EOL
 IChestL:    .asc "tREASURE chest",EOL,"oN THE TOP IS PAINTED",LF,"'sEE YOU IN HELL,",LF
