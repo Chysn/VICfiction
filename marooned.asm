@@ -43,6 +43,7 @@ CASECT      = $0291             ; Disable Commodore case
 VIC         = $9000             ; VIC chip offset
 VIA1PA1     = $9111             ; VIA NMI Reset
 ISCNTC      = $ffe1             ; Check Stop key
+COL         = $d3               ; Screen column
 
 ; NMI Restore
 NMINV       = $0318             ; Release NMI vector
@@ -92,29 +93,26 @@ NewGame:    bit VIA1PA1         ; Reset NMI
             jsr ISCNTC          ; If STOP is down as the game starts
             bne start           ;   we'll go to the READY screen
             brk                 ;   ,,
-start:      lda #<Intro         ; Show intro
-            ldy #>Intro         ; ,,
-            jsr PrintMsg        ; ,,
-            ldx #0              ; Copy initial room location data to
--loop:      inx                 ;   RAM, so it can be updated as items are   
-            lda ItemRoom-1,x    ;   moved around
-            sta ITEM_ROOMS-1,x  ;   ,,
+start:      ldx #0              ; 
+            stx INVENTORY       ; Clear Inventory
+            stx INVENTORY+1     ; ,,
+-loop:      inx                 ; Copy initial room location data to     
+            lda ItemRoom-1,x    ;   RAM, so it can be updated as items are
+            sta ITEM_ROOMS-1,x  ;   moved around
             lda Item1-1,x       ; Check for last item
             bne loop            ;   If not the last item, keep going
             stx END_ITEM        ;   store end item for use as a delimiter
-            lda #1              ; Initialize starting room id
-            sta CURR_ROOM       ; ,,
-            sta SEEN_ROOMS      ; And initialize the starting room as seen
-            lda #0              ; Clear inventory
-            sta INVENTORY       ; ,,
-            sta INVENTORY+1     ; ,,
             ldx #$20            ; Clear the Seen Rooms list, which is used
 -loop:      sta SEEN_ROOMS,x    ;   to show room details on first entry, then
             dex                 ;   suppress for subsequent entries
             bne loop            ;   ,,
-            ldx CURR_ROOM       ; Show room name before game starts
             cli                 ; Clear SEI from ROM hardware vector
-            jmp RoomName        ; ,,
+            lda #<Intro         ; Show intro
+            ldy #>Intro         ; ,,
+            jsr PrintMsg        ; ,,            
+            ldx #1              ; Initialize starting room id
+            stx CURR_ROOM       ; ,,
+            jmp RoomName        ; Show room name before game starts
                  
 ; Verb Not Found
 ; Show an error message, then go back for another command 
@@ -122,16 +120,15 @@ Nonsense:   lda BUFFER+1        ; Potentially process a shortcut if
             bne ShowErr         ;   only one character
             lda BUFFER          ; If the player just hit RETURN, then
             cmp #' '            ;   there's no need to show an error
-            beq skip_lf         ;   ,,
+            beq Main            ;   ,,
 shortcuts:  jmp ShortGo
 ShowErr:    lda #<NoVerbTx      ; Show the error
             ldy #>NoVerbTx      ; ,,
             jsr PrintMsg        ; ,,
-            ; Fall through to GetInput
+            ; Fall through to Main
  
 ; Get Input       
-GetInput:   jsr Linefeed        ; Usually, there's a linefeed for input line
-skip_lf:    lda #COL_INPUT      ; Set the color
+Main:       lda #COL_INPUT      ; Set the color
             jsr CHROUT          ; ,,
             ldx #0              ; X is buffer index
 -loop:      jsr CHRIN           ; KERNAL CHRIN
@@ -146,7 +143,6 @@ enter:      jsr CHROUT          ; Print the RETURN
             lda #0              ; Add the line-ending null
             sta BUFFER,x        ; ,,
             jsr NormCol         ; Set normal color
-            jsr Linefeed        ; Another linefeed
             ; Fall through to Transcribe
 
 ; Transcribe Text Buffer
@@ -166,11 +162,9 @@ Process:    clc                 ; Clear the action result flag
             ldx #$ff            ; Look for actions for this command's verb
 next_act:   inx                 ; ,,
             lda ActVerb,x       ; ,,
+            beq act_done        ; ,, After game-specific actions, do built-in
             cmp VERB_ID         ; ,,
-            beq found_verb      ; ,,
-            cmp #0              ; If not end of list, 
-            bne next_act        ;   go back for the next action
-            jmp PostAction      ; If all actions have been reviewed, next step
+            bne next_act        ; ,,
 found_verb: lda ActItem,x       ; Get the item for this action
             beq item_ok         ;   If the action specifies no item, skip
             cmp ITEM_ID         ; Does the item match the action's item?
@@ -188,17 +182,20 @@ inv_ok:     lda ActRoomCon,x    ; Is there a room item condition?
             beq success         ;   If not, it's unconditional
             jsr ItemInRm        ; Is the item in the room or in inventory?
             bcs success         ;   If so, the action is a success
+act_done:   jmp PostAction      ; Game-specific actions are done
 failure:    sec                 ; FAILURE!
             ror ACT_RESULT      ; Set the action result flag
-            lda ActResTxtH,x    ; Show the second message associated with the
-            tay                 ;   action, which is failure
+            lda ActResTxtH,x    ; Show the failure message for the action
+            beq next_act        ;   ,, (If high byte=0, it's a silent failure)
+            tay                 ;   ,,
             lda ActResTxtL,x    ;   ,,
-            jsr PrintMsgA       ;   ,,
+            jsr PrintAlt        ;   ,,
             jmp next_act        ;   ,,
 success:    sec                 ; SUCCESS!
             ror ACT_RESULT      ; Set the action success flag
-            lda ActResTxtH,x    ; Show the first message associated with the
-            tay                 ;   action
+            lda ActResTxtH,x    ; Show the success message for the action
+            beq next_act        ;   ,, (If high byte=0, it's a silent success)
+            tay                 ;   ,,
             lda ActResTxtL,x    ;   ,,
             jsr PrintMsg        ;   ,,
             lda ActFrom,x       ; Now for the result. Get the From ID
@@ -208,7 +205,7 @@ success:    sec                 ; SUCCESS!
 game_over:  lda #<GameOverTx    ; If From=0 and To=0 then game over
             ldy #>GameOverTx    ;   Display the Game Over message...
             jsr PrintMsg        ;   ,,
-forever:    jmp forever         ; ...Then wait
+-loop:      jmp loop            ; ...Then wait until RESTORE
 move_pl:    sta CURR_ROOM       ; Set current room specified by To ID
             jmp next_act        ; Then continue processing actions
 is_from:    sta TEMP            ; Store the From ID temporarily
@@ -271,9 +268,10 @@ ch_inv:     cmp #INV_CMD        ; Handle INVENTORY
             bne ch_drop         ; ,,
             jmp ShowInv         ; ,,
 ch_drop:    cmp #DROP_CMD       ; Handle DROP
-            beq DoDrop          ; ,,
-            jmp Nonsense        ; Error message if no match
-post_r:     jmp GetInput        ; Return to GetInput main routine
+            bne no_cmd          ; ,,
+            jmp DoDrop          ; ,,
+no_cmd:     jmp Nonsense        ; Error message if no match
+post_r:     jmp Main            ; Return to Main main routine
 
 ; Do Drop
 ; Of item ID
@@ -286,32 +284,56 @@ ch_hand:    lda INVENTORY,y     ; Is the specified item in this hand?
             lda #<NoDropTx      ; The item was not found in inventory, so
             ldy #>NoDropTx      ;   show the "don't have it" message
             jsr PrintMsg        ;   ,,
-            jmp GetInput        ; Return to GetInput main routine
+            jmp Main            ; Return to Main routine
 drop_now:   tax                 ; X is the item index
             lda CURR_ROOM       ; Put the item in the current room
             sta ITEM_ROOMS-1,x  ; ,,
             lda #0              ; Remove it from the hand it's in
             sta INVENTORY,y     ; ,,
             jsr Confirm         ; Show the confirmation message
-            jmp GetInput        ; Return to GetInput main routine
+            jmp Main            ; Return to Main routine
 
 ; Do Look                        
 DoLook:     lda ITEM_ID         ; Get the current item id
-            beq short_room      ; If there's an item id, then interpret LOOK
+            beq ShortRoom       ; If there's an item id, then interpret LOOK
             jmp look_item       ;   as a request to look at that item
-short_room: ldx CURR_ROOM       ; Otherwise, look at the current room
+ShortRoom:  ldx CURR_ROOM       ; Otherwise, look at the current room
             lda RoomTxtH-1,x    ; Show the room description
             tay                 ; ,,
             lda RoomTxtL-1,x    ; ,,
-            jsr PrintMsgA       ; ,,
-            jsr Linefeed        ; Followed by linefeed
+            jsr PrintAlt        ; ,,
+            ; Directional display
+show_dir:   lda #RVS_ON         ; Reverse on
+            jsr CHROUT           ; ,,
+            ldy CURR_ROOM       ; Y is the current room id
+add_north:  lda RoomN-1,y       ;   Does it go North?
+            beq add_south       ;     If not, check South
+            lda #'n'            ;   Add N to display
+            jsr CHROUT          ;   ,,
+add_south:  lda RoomS-1,y       ;   Does it go South?
+            beq add_west        ;     If not, check West
+            lda #'s'            ;   Add S to display
+            jsr CHROUT          ;   ,,
+add_west:   lda RoomW-1,y       ;   Does it go West?
+            beq add_east        ;     If not, check East
+            lda #'w'            ;   Add W to display
+            jsr CHROUT          ;   ,,
+add_east:   lda RoomE-1,y       ;   Does it go East?
+            beq dir_end         ;     If not, finish directional display
+            lda #'e'            ;   Add W to display
+            jsr CHROUT          ;   ,,
+dir_end:    lda #RVS_OFF        ; Reverse off
+            jsr CHROUT          ; ,,
+            jsr Linefeed        ; 2 x Linefeed  
+            jsr Linefeed        ; ,,  
+            ; Item display
             lda #COL_ITEM       ; Set item color
             jsr CHROUT          ; ,,
             lda CURR_ROOM       ; A is the current room
             ldx #0              ; X is the item index
 next_item:  inx                 ; ,,
             cpx END_ITEM        ; Has the last item been reached?
-            beq show_dir        ;   If so, move on to the directional display
+            beq look_r          ;   If so, move back to input main routine
             cmp ITEM_ROOMS-1,x  ; Is the indexed item in the current room?
             bne next_item       ;   If not, check next item
             lda ItemProp-1,x    ; The item is in the current room, but is it
@@ -319,39 +341,11 @@ next_item:  inx                 ; ,,
             beq next_item       ;   If not, check the next item
             lda CURR_ROOM       ; If so, show the item's name
             pha                 ; ,,
-            lda #' '            ; ,,
-            jsr CHROUT          ; ,,
             lda ItemTxtL-1,x    ; ,,
             ldy ItemTxtH-1,x    ; ,,
-            jsr PrintMsg        ; ,,
+            jsr PrintNoLF       ; ,,
             pla                 ; ,,
             jmp next_item       ; Go to the next item
-show_dir:   jsr NormCol         ; Items are done, set color back to normal and
-            lda #RVS_ON         ;   Reverse On for directional display
-            jsr CHROUT          ;   ,,
-            lda #0              ; ???
-            sta PATTERN         ; ???
-            ldy CURR_ROOM       ; Y is the current room id
-            lda RoomN-1,y       ;   Does it go North?
-            beq add_east        ;     If not, check East
-            lda #'n'            ;   Add N to display
-            jsr CHROUT          ;   ,,
-add_east:   lda RoomE-1,y       ;   Does it go East?
-            beq add_south       ;     If not, check South
-            lda #'e'            ;   Add E to display
-            jsr CHROUT          ;   ,,
-add_south:  lda RoomS-1,y       ;   Does it go South?
-            beq add_west        ;     If not, check West
-            lda #'s'            ;   Add S to display
-            jsr CHROUT          ;   ,,
-add_west:   lda RoomW-1,y       ;   Does it go West?
-            beq look_r          ;     If not, finish directional display
-            lda #'w'            ;   Add W to display
-            jsr CHROUT          ;   ,,
-look_r:     lda #RVS_OFF        ; Reverse Off
-            jsr CHROUT          ; ,,
-            jsr Linefeed        ; Linefeed
-            jmp GetInput        ; Return to GetInput main routine           
 look_item:  jsr ItemInRm        ; The LOOK command took an item id. Is that item
             bcs in_room         ;   in the current room?
             jmp NotHere         ;   If not,  show "Not Here" error message
@@ -363,8 +357,8 @@ in_room:    tax                 ; X = specified item id
 ok_show:    lda ItemTxtH-1,x    ; Show the description of the item
             tay                 ; ,,
             lda ItemTxtL-1,x    ; ,,
-            jsr PrintMsgA       ; ,,
-            jmp GetInput        ; Return to GetInput main routine
+            jsr PrintAlt        ; ,,
+look_r:     jmp Main            ; Return to Main routine
 
 ; Do Go           
 DoGo:       ldx #0
@@ -392,23 +386,24 @@ move:       beq go_fail
             tax
 RoomName:   lda #COL_ROOM
             jsr CHROUT
+            jsr Linefeed
             lda RoomTxtH-1,x
             tay
             lda RoomTxtL-1,x
             jsr PrintMsg
-            jsr NormCol
             ldx CURR_ROOM
             lda SEEN_ROOMS-1,x
             bne return
             lda #1
             sta SEEN_ROOMS-1,x
+            jsr NormCol         ; Reset to normal color            
             jmp ShortRoom
-return:     jmp GetInput
+return:     jmp Main    
 invalid:    jmp ShowErr         ; Like Nonsense, but don't look at shortcuts
 go_fail:    lda #<NoPathTx
             ldy #>NoPathTx
 PrintRet:   jsr PrintMsg
-            jmp GetInput
+            jmp Main    
 
 ; Do Get            
 DoGet:      lda ITEM_ID
@@ -451,17 +446,14 @@ ShowInv:    lda #COL_ITEM
 -loop:      lda INVENTORY,y
             beq nothing
             tax
-            sty PATTERN
-            lda #' '
-            jsr CHROUT
+            sty TEMP+1
             lda ItemTxtL-1,x
             ldy ItemTxtH-1,x
-            jsr PrintMsg
-            ldy PATTERN
+            jsr PrintNoLF
+            ldy TEMP+1
 nothing:    dey
             bpl loop
-            jsr NormCol
-            jmp GetInput
+            jmp Main    
                                                        
 ; Get Pattern
 ;   from the Input Buffer
@@ -559,7 +551,7 @@ itemid_r:   rts                 ; ,,
 
 ; Print Alternate Message
 ; Given the Message address (A, Y), look for the EOL+1, then print from there
-PrintMsgA:  sta PATTERN
+PrintAlt:   sta PATTERN
             sty PATTERN+1
             ldy #0
 -loop:      lda (PATTERN),y
@@ -574,7 +566,14 @@ ch_end:     cmp #0
 
 ; Print Message 1
 ; Print the first message at the specified address
-PrintMsg:   stx TEMP
+PrintMsg:   pha
+            tya
+            pha
+            jsr Linefeed
+            pla
+            tay
+            pla
+PrintNoLF:  stx TEMP
             jsr PRINT
             jsr Linefeed
             ldx TEMP
@@ -597,7 +596,7 @@ Intro:      .asc 147,COL_NORM,"tHE SUN BEATS DOWN",LF,"ON YOU. yOU DON'T",LF
             .asc "YOUR CREW PRETTY MAD.",LF,LF,
             .asc 156,"mAROONED",LF,LF,"pROOF-oF-cONCEPT",LF
             .asc "FOR vicFICTION eNGINE",LF
-            .asc "2022 jASON jUSTIAN",LF,LF,EOL
+            .asc "2022 jASON jUSTIAN",EOL
 NoVerbTx:   .asc COL_ALERT,"nO NEED TO DO THAT",COL_NORM,EOL
 NoDropTx:   .asc COL_ALERT,"yOU DON'T HAVE THAT",COL_NORM,EOL
 HaveItTx:   .asc COL_ALERT,"yOU ALREADY HAVE IT",COL_NORM,EOL
@@ -637,18 +636,18 @@ RoomTxtH:   .byte >RNIsland,>RDock,>RWIsland,>REIsland,>RAft,>RFore
 ; Rooms
 RNIsland:   .asc "nORTH iSLAND",EOL,"wHEN THEY TALK ABOUT",LF
             .asc "A 'DESERTED ISLAND,'",LF,"THEY MEAN THIS.",LF,LF
-            .asc "tHE HORIZON IS BEREFT",LF,"OF ALL BUT BRINY DEEP.",EOL
+            .asc "tHE HORIZON IS BEREFT",LF,"OF BUT BRINY DEEP.",EOL
 RDock:      .asc "sOUTH dOCK",EOL,"mORE SEA,HANG THE JIB!",LF
-            .asc "bUT PERHAPS THE DOCK",LF,"OFFERS SCANT HOPE...",LF,EOL
+            .asc "bUT PERHAPS THE DOCK",LF,"OFFERS SCANT HOPE...",EOL
 RWIsland:   .asc "wEST iSLAND",EOL,"bRUTAL WAVES CRASH",LF,"THE WEST SIDE.",LF,LF
             .asc "tHIS MAY BE THE MOST",LF,"DESOLATE PLACE OF ALL.",EOL
 REIsland:   .asc "eAST iSLAND",EOL,"a SANDY BEACH FOLLOWS",LF,
             .asc "THIS JAGGED COAST.",LF,LF,"iF YOU WEREN'T DOOMED",LF,
-            .asc "YOU MIGHT CALL IT",LF,"PARADISE.",LF,EOL
+            .asc "YOU MIGHT CALL IT",LF,"PARADISE.",EOL
 RAft:       .asc "bOAT, aFT",EOL,"tHE AFT SECTION OF A",LF,"SMALL WOODEN BOAT.",LF,LF
-            .asc "iT SHOULD BE ENOUGH",LF,"TO GET TO tORTUGA.",LF,EOL
+            .asc "iT SHOULD BE ENOUGH",LF,"TO GET TO tORTUGA.",EOL
 RFore:      .asc "bOAT, fORE",EOL,"tHE FORE SECTION.",LF,LF,"tHE ANCHOR LINE BOBS",LF
-            .asc "AGAINST THE SIDE.",LF,EOL
+            .asc "AGAINST THE SIDE.",EOL
 
 ; Items
 ;   Item1    - First Character
@@ -664,8 +663,8 @@ RFore:      .asc "bOAT, fORE",EOL,"tHE FORE SECTION.",LF,LF,"tHE ANCHOR LINE BOB
 ; 
 ; Bottle of Rum,Empty Bottle,Locked Chest,Open Chest,Djinn,Sand,Lamp,Shovel
 ; Key, Anchor, Boat
-Item1:      .byte "R","B","C","C","D","S","L","S","K","A","B","S","Z",EOL
-ItemL:      .byte "M","E","T","T","N","D","P","L","Y","R","T","E","Z",EOL
+Item1:      .byte "R","B","C","C","D","S","L","S","K","L","B","S","Z",EOL
+ItemL:      .byte "M","E","T","T","N","D","P","L","Y","E","T","E","Z",EOL
 ItemRoom:   .byte  0 , 0 , 1 , 0 , 0 , 4,  0 , 3,  2,  6,  0 , 0 , 2, EOL
 ItemProp:   .byte  3 , 3 , 1 , 1 , 1 , 1,  3 , 3,  3,  1,  1,  3,  4, EOL
 ItemTxtL:   .byte <IRum,<IBottle,<IChestL,<IChestO,<IDjinn,<ISand,<ILamp
@@ -686,8 +685,8 @@ ILamp:      .asc "mAGIC lamp",EOL,"iT'S HEAVIER THAN IT",LF,"APPEARS, AND IS A B
             .asc "SMUDGED...",EOL
 IShovel:    .asc "oLD shovel",EOL,"iT'S DECREPIT, BUT",LF,"STILL SERVICEABLE",EOL
 IKey:       .asc "sILVER key",EOL,"tHIS LOOKS FAMILIAR...",EOL
-IAnchor:    .asc "bOAT anchor",EOL,"tHE ANCHOR IS UNDER",LF,"WATER, BUT YOU CAN",LF
-            .asc "EASILY RAISE IT",EOL
+IAnchor:    .asc "aNCHOR line",EOL,"tHE ANCHOR IS UNDER",LF,"WATER, BUT YOU CAN",LF
+            .asc "EASILY RAISE THE LINE",EOL
 IBoat:      .asc "dOCKED boat",EOL,"aVAST, WHAT A GORGEOUSSIGHT! yOU CAN BOARD",LF
             .asc "EASILY.",EOL
 IShoe:      .asc "bLUE shoe",EOL,"cONVERSE aLL-sTAR",LF,"sIZE 13",EOL
@@ -722,16 +721,16 @@ IShoe:      .asc "bLUE shoe",EOL,"cONVERSE aLL-sTAR",LF,"sIZE 13",EOL
 ;   ActResTxt  - The address of the success and failure messasges
 ;                (The success message is terminated by EOL, after which is the
 ;                 failure message, also terminated by EOL)
-ActVerb:    .byte 12, 12, 6, 7, 8, 13, 9,  9, 10, 11, EOL
-ActItem:    .byte 3,   3, 0, 6, 1, 7,  0,  0, 11, 10, EOL
-ActInvCon:  .byte 9,   9, 0, 8, 1, 7,  0,  0,  0,  0, EOL
-ActRoomCon: .byte 0,   0, 0, 0, 0, 0,  5, 12,  0, 10, EOL
-ActFrom:    .byte 1,   3, 0, 6, 1, 5,  5, 13,  0,  0, EOL
-ActTo:      .byte 0,   4, 0, 7, 2, 0, 12, 11,  5,  0, EOL
-ActResTxtL: .byte <AOpen,<ANone,<ASwim,<ADig,<ADrink,<ARubLamp,<AWish,<ANone
-            .byte <ABoard,<AAnchor
-ActResTxtH: .byte >AOpen,>ANone,>ASwim,>ADig,>ADrink,>ARubLamp,>AWish,>ANone
-            .byte >ABoard,>AAnchor
+ActVerb:    .byte 12, 12, 6, 7, 8, 13, 9,  9, 10, 11, 3, EOL
+ActItem:    .byte 3,   3, 0, 0, 1, 7,  0,  0, 11, 10, 10,EOL
+ActInvCon:  .byte 9,   9, 0, 8, 1, 7,  0,  0,  0,  0, 0, EOL
+ActRoomCon: .byte 0,   0, 0, 6, 0, 0,  5, 12,  0, 10, 10,EOL
+ActFrom:    .byte 1,   3, 0, 6, 1, 5,  5, 13,  0,  0, 0, EOL
+ActTo:      .byte 0,   4, 0, 7, 2, 0, 12, 11,  5,  0, 0, EOL
+ActResTxtL: .byte <AOpen,0,<ASwim,<ADig,<ADrink,<ARubLamp,<AWish,0
+            .byte <ABoard,<AAnchor,<AAnchor
+ActResTxtH: .byte >AOpen,0,>ASwim,>ADig,>ADrink,>ARubLamp,>AWish,0
+            .byte >ABoard,>AAnchor,>AAnchor
             
 ; Action Results
 ANone:      .asc "",EOL,"",EOL
