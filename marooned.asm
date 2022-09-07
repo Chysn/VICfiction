@@ -24,6 +24,15 @@
 * = $1001
 Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$30
             .byte $39,$00,$00,$00
+            
+; Configuration
+TIME_LIMIT  = 12                ; Time limit (0=No limit)
+SCRCOL      = 8                 ; Screen color
+COL_INPUT   = 5                 ; Input color
+COL_NORM    = 30                ; Text color
+COL_ALERT   = 28                ; Alert color
+COL_ITEM    = 158               ; Item color
+COL_ROOM    = 31                ; Room name color
 
 ; Game Memory Locations
 VERB_ID     = $00               ; Verb ID
@@ -33,8 +42,10 @@ INVENTORY   = $a4               ; Inventory (2 bytes)
 CURR_ROOM   = $a6               ; Current room
 END_ITEM    = $a7               ; Index of end of item list
 ACT_RESULT  = $a8               ; At least one action had a result
-TEMP        = $a9               ; Temporary value
-FROM_ID     = $a9               ; From ID
+TEMP        = $a9               ; Temporary value (3 bytes)
+FROM_ID     = $a9               ; From ID during transform
+TO_ID       = $aa               ; To ID during transform
+TIMER       = $ac               ; Game timer
 BUFFER      = $0220             ; Input buffer
 SEEN_ROOMS  = $0340             ; Marked as 1 when entered
 ITEM_ROOMS  = $0360             ; RAM storage for item rooms
@@ -54,7 +65,8 @@ NMINV       = $0318             ; Release NMI vector
 PRINT       = $cb1e             ; Temporary print
 CHRIN       = $ffcf             ; Get input
 CHROUT      = $ffd2             ; Character out
-
+PRTFIX      = $ddcd             ; Decimal display routine
+  
 ; Constants
 SPACE       = $20               ; Space
 EOL         = $00               ; End of line or list
@@ -66,15 +78,10 @@ LOOK_CMD    = 2                 ;               - LOOK
 GET_CMD     = 3                 ;               - GET
 DROP_CMD    = 4                 ;               - DROP
 INV_CMD     = 5                 ;               - INVENTORY
-IS_VISIBLE  = $01               ; Item Property - Visible
-IS_MOVEABLE = $02               ; Item Property - Moveable
+IS_INVIS    = $01               ; Item Property - Visible
+IS_UNMOVE   = $02               ; Item Property - Moveable
 IS_PLHOLDER = $04               ; Item Property - Placeholder
-SCRCOL      = 8                 ; Screen color
-COL_INPUT   = 5                 ; Input color
-COL_NORM    = 30                ; Text color
-COL_ALERT   = 28                ; Alert color
-COL_ITEM    = 158               ; Item color
-COL_ROOM    = 31                ; Room name color
+IS_TIMER    = $08               ; Item Property - Timer Display
 
 ; Initialize 
 Init:       lda #<NewGame       ; Install the custom NMI (restart)
@@ -97,6 +104,7 @@ NewGame:    bit VIA1PA1         ; Reset NMI
 start:      ldx #0              ; 
             stx INVENTORY       ; Clear Inventory
             stx INVENTORY+1     ; ,,
+            stx TIMER           ; Reset timer
 -loop:      inx                 ; Copy initial room location data to     
             lda ItemRoom-1,x    ;   RAM, so it can be updated as items are
             sta ITEM_ROOMS-1,x  ;   moved around
@@ -216,18 +224,18 @@ is_from:    sta FROM_ID         ; Store the From ID temporarily
             lda CURR_ROOM       ;   the current room
             sta ITEM_ROOMS-1,y  ;   ,,
             jmp next_act        ; Contine processing
-xform:      sta TEMP+1          ; Transform - Put To where From is
-            ldy TEMP            ;   Get the From item's current location
+xform:      sta TO_ID           ; Transform - Put To where From is
+            ldy FROM_ID         ;   Get the From item's current location
             lda ITEM_ROOMS-1,y  ;   ,,
-            ldy TEMP+1          ;   And store it into the To index
+            ldy TO_ID           ;   And store it into the To index
             sta ITEM_ROOMS-1,y  ;   ,,
-            ldy TEMP            ;   Take the To item out of the system by
+            ldy FROM_ID         ;   Take the To item out of the system by
             lda #0              ;     setting its room to 0
             sta ITEM_ROOMS-1,y  ;     ,,
             lda INVENTORY       ; Is the From item in the left hand?
-            cmp TEMP            ;   ,,
+            cmp FROM_ID         ;   ,,
             bne ch_inv2         ;   If not, check the other hand
-            lda TEMP+1          ;   Update the item in hand
+            lda TO_ID           ;   Update the item in hand
             sta INVENTORY       ;   ,,
             cmp INVENTORY+1     ; If the same thing is in the other hand,
             bne next_act2       ;   then get rid of it
@@ -235,9 +243,9 @@ xform:      sta TEMP+1          ; Transform - Put To where From is
             sta INVENTORY+1     ;   ,,
             jmp next_act        ;   Check next action
 ch_inv2:    lda INVENTORY+1     ; Is the From item in the right hand?
-            cmp TEMP            ;   ,,
+            cmp FROM_ID         ;   ,,
             bne next_act2       ;   If not, check next action
-            lda TEMP+1          ;   If so, switch
+            lda TO_ID           ;   If so, switch
             sta INVENTORY+1     ;   ,,
             cmp INVENTORY       ; If the same thing is in the other hand
             bne next_act2       ;   then get rid of it
@@ -254,7 +262,7 @@ next_act2:  jmp next_act        ;   Check next action
 ;   - DROP   
 ;   - INVENTORY
 PostAction: bit ACT_RESULT      ; Bypass the basic actions if one or more
-            bmi post_r          ;   database actions was successful
+            bmi adv_timer       ;   database actions was attempted
             lda VERB_ID         ; Get the entered verb
             cmp #GO_CMD         ; Handle GO/MOVE
             bne ch_look         ; ,,
@@ -272,6 +280,15 @@ ch_drop:    cmp #DROP_CMD       ; Handle DROP
             bne no_cmd          ; ,,
             jmp DoDrop          ; ,,
 no_cmd:     jmp Nonsense        ; Error message if no match
+adv_timer:  inc TIMER
+            beq post_r
+            lda TIMER
+            cmp #TIME_LIMIT
+            bne post_r
+            lda #<TimeTx
+            ldy #>TimeTx
+            jsr PrintMsg
+            jmp game_over
 post_r:     jmp Main            ; Return to Main main routine
 
 ; Do Drop
@@ -284,8 +301,7 @@ ch_hand:    lda INVENTORY,y     ; Is the specified item in this hand?
             bpl ch_hand         ;   ,,
             lda #<NoDropTx      ; The item was not found in inventory, so
             ldy #>NoDropTx      ;   show the "don't have it" message
-            jsr PrintMsg        ;   ,,
-            jmp Main            ; Return to Main routine
+            jsr PrintRet        ;   ,,
 drop_now:   tax                 ; X is the item index
             lda CURR_ROOM       ; Put the item in the current room
             sta ITEM_ROOMS-1,x  ; ,,
@@ -338,8 +354,8 @@ next_item:  inx                 ; ,,
             cmp ITEM_ROOMS-1,x  ; Is the indexed item in the current room?
             bne next_item       ;   If not, check next item
             lda ItemProp-1,x    ; The item is in the current room, but is it
-            and #IS_VISIBLE     ;   visible?
-            beq next_item       ;   If not, check the next item
+            and #IS_INVIS       ;   visible?
+            bne next_item       ;   If not, check the next item
             lda CURR_ROOM       ; If so, show the item's name
             pha                 ; ,,
             lda ItemTxtL-1,x    ; ,,
@@ -352,13 +368,20 @@ look_item:  jsr ItemInRm        ; The LOOK command took an item id. Is that item
             jmp NotHere         ;   If not,  show "Not Here" error message
 in_room:    tax                 ; X = specified item id
             lda ItemProp-1,x    ; Is the item visible?
-            and #IS_VISIBLE     ;   ,,
-            bne ok_show         ;   If so, show it
+            and #IS_INVIS       ;   ,,
+            beq ok_show         ;   If so, show it
             jmp NotHere         ;   Otherwise, show "Not Here" error message
 ok_show:    lda ItemTxtH-1,x    ; Show the description of the item
             tay                 ; ,,
             lda ItemTxtL-1,x    ; ,,
             jsr PrintAlt        ; ,,
+            lda ItemProp-1,x
+            and #IS_TIMER
+            beq look_r
+            ldx TIMER
+            lda #0
+            jsr PRTFIX
+            jsr Linefeed
 look_r:     jmp Main            ; Return to Main routine
 
 ; Do Go           
@@ -415,8 +438,8 @@ DoGet:      lda ITEM_ID
             bcc get_fail
             tax
             lda ItemProp-1,x
-            and #IS_MOVEABLE
-            beq unmoving
+            and #IS_UNMOVE
+            bne unmoving
             lda INVENTORY
             bne ch_empty
             stx INVENTORY
@@ -596,17 +619,17 @@ Intro:      .asc 147,COL_NORM,"tHE SUN BEATS DOWN",LF,"ON YOU. yOU DON'T",LF
             .asc "REMEMBER MUCH, BUT",LF,"CLEARLY YOU MADE",LF
             .asc "YOUR CREW PRETTY MAD.",LF,LF,
             .asc 156,"mAROONED",LF,LF,"pROOF-oF-cONCEPT",LF
-            .asc "FOR vicFICTION eNGINE",LF
-            .asc "2022 jASON jUSTIAN",EOL
-NoVerbTx:   .asc COL_ALERT,"nO NEED TO DO THAT",COL_NORM,EOL
-NoDropTx:   .asc COL_ALERT,"yOU DON'T HAVE THAT",COL_NORM,EOL
-HaveItTx:   .asc COL_ALERT,"yOU ALREADY HAVE IT",COL_NORM,EOL
-GameOverTx: .asc COL_ALERT,"gAME OVER, cAP'T rED!",COL_NORM,EOL
-NotHereTx:  .asc COL_ALERT,"aRH, THAT BE NOT HERE",COL_NORM,EOL
-NoPathTx:   .asc COL_ALERT,"nOTHIN' BE THAT WAY",COL_NORM,EOL
-NoMoveTx:   .asc COL_ALERT,"aVAST, CAN'T HOLD IT",COL_NORM,EOL
-FullTx:     .asc COL_ALERT,"bOTH HANDS BE FULL",COL_NORM,EOL
-ConfirmTx:  .asc COL_ALERT,"aYE AYE, cAPTAIN",COL_NORM,EOL
+            .asc "FOR vicFICTION eNGINE",EOL
+NoVerbTx:   .asc COL_ALERT,"nO NEED TO DO THAT",EOL
+NoDropTx:   .asc COL_ALERT,"yOU DON'T HAVE THAT",EOL
+HaveItTx:   .asc COL_ALERT,"yOU ALREADY HAVE IT",EOL
+GameOverTx: .asc COL_ALERT,"gAME OVER, cAP'T rED!",EOL
+NotHereTx:  .asc COL_ALERT,"aRH, THAT BE NOT HERE",EOL
+NoPathTx:   .asc COL_ALERT,"nOTHIN' BE THAT WAY",EOL
+NoMoveTx:   .asc COL_ALERT,"aVAST, CAN'T HOLD IT",EOL
+FullTx:     .asc COL_ALERT,"bOTH HANDS BE FULL",EOL
+ConfirmTx:  .asc COL_ALERT,"aYE AYE, cAPTAIN",EOL
+TimeTx:     .asc COL_ALERT,"yOU DIE OF THIRST!",EOL
 
 ; Verbs
 ;   VerbID - Cross-referenced ID list for verb synonyms
@@ -635,14 +658,14 @@ RoomTxtL:   .byte <RNIsland,<RDock,<RWIsland,<REIsland,<RAft,<RFore
 RoomTxtH:   .byte >RNIsland,>RDock,>RWIsland,>REIsland,>RAft,>RFore
 
 ; Rooms
-RNIsland:   .asc "nORTH iSLAND",EOL,"wHEN THEY TALK ABOUT",LF
+RNIsland:   .asc "iSLAND - nORTH",EOL,"wHEN THEY TALK ABOUT",LF
             .asc "A 'DESERTED ISLAND,'",LF,"THEY MEAN THIS.",LF,LF
             .asc "tHE HORIZON IS BEREFT",LF,"OF BUT BRINY DEEP.",EOL
 RDock:      .asc "sOUTH dOCK",EOL,"mORE SEA,HANG THE JIB!",LF
             .asc "bUT PERHAPS THE DOCK",LF,"OFFERS SCANT HOPE...",EOL
-RWIsland:   .asc "wEST iSLAND",EOL,"bRUTAL WAVES CRASH",LF,"THE WEST SIDE.",LF,LF
-            .asc "tHIS MAY BE THE MOST",LF,"DESOLATE PLACE OF ALL.",EOL
-REIsland:   .asc "eAST iSLAND",EOL,"a SANDY BEACH FOLLOWS",LF,
+RWIsland:   .asc "rOCKY bANK",EOL,"bRUTAL WAVES CRASH",LF,"THE WEST SIDE.",LF,LF
+            .asc "tHIS MAY BE THE MOST",LF,"DESOLATE PLACE.",EOL
+REIsland:   .asc "bEACH",EOL,"a SANDY BEACH FOLLOWS",LF,
             .asc "THIS JAGGED COAST.",LF,LF,"iF YOU WEREN'T DOOMED",LF,
             .asc "YOU MIGHT CALL IT",LF,"PARADISE.",EOL
 RAft:       .asc "bOAT, aFT",EOL,"tHE AFT SECTION OF A",LF,"SMALL WOODEN BOAT.",LF,LF
@@ -655,9 +678,10 @@ RFore:      .asc "bOAT, fORE",EOL,"tHE FORE SECTION.",LF,LF,"tHE ANCHOR LINE BOB
 ;   ItemL    - Last Character
 ;   ItemRoom - Starting Room ID
 ;   ItemProp - Item Properties
-;     Bit 0 = Is visible (not shown, but can be interacted with)
-;     Bit 1 = Is moveable (cannot move from its room)
+;     Bit 0 = Is invisible (not shown, but can be interacted with)
+;     Bit 1 = Is un-moveable (cannot move from its room)
 ;     Bit 2 = Is placeholder (cannot be used as an item)
+;     Bit 3 = Is timekeeping device (shows number of action attempts) 
 ;   ItemTxt  - Address of item name and description
 ;   (The item name is terminated by EOL, after which is the item description,
 ;    also terminated by EOL)
@@ -667,11 +691,11 @@ RFore:      .asc "bOAT, fORE",EOL,"tHE FORE SECTION.",LF,LF,"tHE ANCHOR LINE BOB
 Item1:      .byte "R","B","C","C","D","S","L","S","K","L","B","S","Z",EOL
 ItemL:      .byte "M","E","T","T","N","D","P","L","Y","E","T","E","Z",EOL
 ItemRoom:   .byte  0 , 0 , 1 , 0 , 0 , 4,  0 , 3,  2,  6,  0 , 0 , 2, EOL
-ItemProp:   .byte  3 , 3 , 1 , 1 , 1 , 1,  3 , 3,  3,  1,  1,  3,  4, EOL
+ItemProp:   .byte  0 , 0 , 2 , 2 , 2 , 2,  0 , 0,  0,  2,  2,  0,  7, EOL
 ItemTxtL:   .byte <IRum,<IBottle,<IChestL,<IChestO,<IDjinn,<ISand,<ILamp
-            .byte <IShovel,<IKey,<IAnchor,<IBoat,<IShoe,<ANone,EOL
+            .byte <IShovel,<IKey,<IAnchor,<IBoat,<IShoe,0,EOL
 ItemTxtH:   .byte >IRum,>IBottle,>IChestL,>IChestO,>IDjinn,>ISand,>ILamp
-            .byte >IShovel,>IKey,>IAnchor,>IBoat,>IShoe,>ANone,EOL
+            .byte >IShovel,>IKey,>IAnchor,>IBoat,>IShoe,0,EOL
 
 ; Items
 IRum:       .asc "bOTTLE OF rum",EOL,"wELL, SO YOUR CREW",LF,"WASN'T TOTALLY CRUEL",EOL
@@ -734,7 +758,6 @@ ActResTxtH: .byte >AOpen,0,>ASwim,>ADig,>ADrink,>ARubLamp,>AWish,0
             .byte >ABoard,>AAnchor,>AAnchor
             
 ; Action Results
-ANone:      .asc "",EOL,"",EOL
 AOpen:      .asc "wITH A SMART CLICK",LF,"THE CHEST OPENS.",LF
             .asc "sOMETHING FALLS OUT.",EOL,"lOCKED, YE SCURVY DOG",EOL
 ASwim:      .asc "yOU DESPERATELY ENTER",LF,"THE ANGRY SURF, HOPINGTO ESCAPE YOUR",LF
