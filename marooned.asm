@@ -34,6 +34,7 @@ CURR_ROOM   = $a6               ; Current room
 END_ITEM    = $a7               ; Index of end of item list
 ACT_RESULT  = $a8               ; At least one action had a result
 TEMP        = $a9               ; Temporary value
+FROM_ID     = $a9               ; From ID
 BUFFER      = $0220             ; Input buffer
 SEEN_ROOMS  = $0340             ; Marked as 1 when entered
 ITEM_ROOMS  = $0360             ; RAM storage for item rooms
@@ -194,11 +195,11 @@ failure:    sec                 ; FAILURE!
 success:    sec                 ; SUCCESS!
             ror ACT_RESULT      ; Set the action success flag
             lda ActResTxtH,x    ; Show the success message for the action
-            beq next_act        ;   ,, (If high byte=0, it's a silent success)
+            beq do_result       ;   ,, (If high byte=0, it's a silent success)
             tay                 ;   ,,
             lda ActResTxtL,x    ;   ,,
             jsr PrintMsg        ;   ,,
-            lda ActFrom,x       ; Now for the result. Get the From ID
+do_result:  lda ActFrom,x       ; Now for the result. Get the From ID
             bne is_from         ;   Is there a From ID?
             lda ActTo,x         ; If there's no From ID, is there a To ID?
             bne move_pl         ;   If From=0 and To=ID then move player
@@ -208,10 +209,10 @@ game_over:  lda #<GameOverTx    ; If From=0 and To=0 then game over
 -loop:      jmp loop            ; ...Then wait until RESTORE
 move_pl:    sta CURR_ROOM       ; Set current room specified by To ID
             jmp next_act        ; Then continue processing actions
-is_from:    sta TEMP            ; Store the From ID temporarily
-            lda ActTo,x         ; Is there a To ID?
+is_from:    sta FROM_ID         ; Store the From ID temporarily
+            lda ActTo,x         ; A = To ID?
             bne xform           ;   If so, do the transform
-            ldy TEMP            ; If To=0 then move the item in From ID to
+            ldy FROM_ID         ; If To=0 then move the item in From ID to
             lda CURR_ROOM       ;   the current room
             sta ITEM_ROOMS-1,y  ;   ,,
             jmp next_act        ; Contine processing
@@ -446,11 +447,11 @@ ShowInv:    lda #COL_ITEM
 -loop:      lda INVENTORY,y
             beq nothing
             tax
-            sty TEMP+1
+            sty TEMP
             lda ItemTxtL-1,x
             ldy ItemTxtH-1,x
             jsr PrintNoLF
-            ldy TEMP+1
+            ldy TEMP
 nothing:    dey
             bpl loop
             jmp Main    
@@ -573,10 +574,10 @@ PrintMsg:   pha
             pla
             tay
             pla
-PrintNoLF:  stx TEMP
+PrintNoLF:  stx TEMP+2
             jsr PRINT
             jsr Linefeed
-            ldx TEMP
+            ldx TEMP+2
             rts
 
 ; Normal Color Shortcut
@@ -675,7 +676,7 @@ ItemTxtH:   .byte >IRum,>IBottle,>IChestL,>IChestO,>IDjinn,>ISand,>ILamp
 ; Items
 IRum:       .asc "bOTTLE OF rum",EOL,"wELL, SO YOUR CREW",LF,"WASN'T TOTALLY CRUEL",EOL
 IBottle:    .asc "eMPTY bottle",EOL,"iT ONCE HELD MEDIOCRE",LF,"RUM, NOW BONE DRY",EOL
-IChestL:    .asc "tEASURE chest",EOL,"oN THE TOP IS PAINTED",LF,"'sEE YOU IN HELL,",LF
+IChestL:    .asc "tREASURE chest",EOL,"oN THE TOP IS PAINTED",LF,"'sEE YOU IN HELL,",LF
             .asc "cAP'T rED.'",EOL
 IChestO:    .asc "tREASURE chest",EOL,"sAME INSULT AS BEFORE",LF,"BUT OPEN",EOL
 IDjinn:     .asc "tHE djinn",EOL,"'tHANK YOU!,' SAYS",LF,"THE BLUE dJINN. 'i",LF
@@ -724,9 +725,9 @@ IShoe:      .asc "bLUE shoe",EOL,"cONVERSE aLL-sTAR",LF,"sIZE 13",EOL
 ActVerb:    .byte 12, 12, 6, 7, 8, 13, 9,  9, 10, 11, 3, EOL
 ActItem:    .byte 3,   3, 0, 0, 1, 7,  0,  0, 11, 10, 10,EOL
 ActInvCon:  .byte 9,   9, 0, 8, 1, 7,  0,  0,  0,  0, 0, EOL
-ActRoomCon: .byte 0,   0, 0, 6, 0, 0,  5, 12,  0, 10, 10,EOL
-ActFrom:    .byte 1,   3, 0, 6, 1, 5,  5, 13,  0,  0, 0, EOL
-ActTo:      .byte 0,   4, 0, 7, 2, 0, 12, 11,  5,  0, 0, EOL
+ActRoomCon: .byte 0,   0, 0, 6, 0, 0,  5,  5,  0, 10, 10,EOL
+ActFrom:    .byte 1,   3, 0, 6, 1, 5, 13,  5,  0,  0, 0, EOL
+ActTo:      .byte 0,   4, 0, 7, 2, 0, 11, 12,  5,  0, 0, EOL
 ActResTxtL: .byte <AOpen,0,<ASwim,<ADig,<ADrink,<ARubLamp,<AWish,0
             .byte <ABoard,<AAnchor,<AAnchor
 ActResTxtH: .byte >AOpen,0,>ASwim,>ADig,>ADrink,>ARubLamp,>AWish,0
