@@ -1,7 +1,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
-;                                  Marooned
-;                     Demo of VICfiction for Unexpanded VIC
+;                            VICfiction Playground
+;                     Test of VICfiction for Unexpanded VIC
 ;                            (c)2022, Jason Justian
 ;                  
 ; Assembled with XA
@@ -20,20 +20,27 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; This is the tokenization of the following BASIC program, which
 ; runs this game
-;     42 SYS4160
-* = $1001
-Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$31,$30
-            .byte $39,$00,$00,$00
+;     42 SYS4621
+* = $1201
+Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$36,$32
+            .byte $31,$00,$00,$00
             
 ; Configuration
-TIME_LIMIT  = 0                 ; Time limit (0=No limit)
-HOUR_OFFSET = 5                 ; Hour offset
 SCRCOL      = 8                 ; Screen color
 COL_INPUT   = 5                 ; Input color
 COL_NORM    = 30                ; Text color
 COL_ALERT   = 28                ; Alert color
 COL_ITEM    = 158               ; Item color
 COL_ROOM    = 31                ; Room name color
+COL_DIR     = 159               ; Directional display color
+
+; Timer Configuration
+TIMER_START = 0                 ; Timer starting value
+TIMER_DIR   = $01               ; Timer direction ($01 = +1, $ff = -1)
+TIMER_TGT   = 5                 ; Timer target (at which TIMEOUT_ACT happens)
+TIMEOUT_ACT = 1                 ; Timeout Action ID
+TRIGGER     = 1                 ; Timer value when triggered
+TIME_OFFSET = 8                 ; Display time offset (e.g., for clocks)
 
 ; Game Memory Locations
 VERB_ID     = $00               ; Verb ID
@@ -42,7 +49,7 @@ PATTERN     = $02               ; Pattern (2 bytes)
 INVENTORY   = $a4               ; Inventory (2 bytes) 
 CURR_ROOM   = $a6               ; Current room
 END_ITEM    = $a7               ; Index of end of item list
-ACT_RESULT  = $a8               ; At least one action had a result
+ACT_SUCCESS = $a8               ; At least one action was successful
 TEMP        = $a9               ; Temporary value (3 bytes)
 FROM_ID     = $a9               ; From ID during transform
 TO_ID       = $aa               ; To ID during transform
@@ -57,8 +64,6 @@ ITEM_ROOMS  = $0360             ; RAM storage for item rooms
 CASECT      = $0291             ; Disable Commodore case
 VIC         = $9000             ; VIC chip offset
 VIA1PA1     = $9111             ; VIA NMI Reset
-ISCNTC      = $ffe1             ; Check Stop key
-COL         = $d3               ; Screen column
 
 ; NMI Restore
 NMINV       = $0318             ; Release NMI vector
@@ -69,6 +74,8 @@ PRINT       = $cb1e             ; Temporary print
 CHRIN       = $ffcf             ; Get input
 CHROUT      = $ffd2             ; Character out
 PRTFIX      = $ddcd             ; Decimal display routine
+ISCNTC      = $ffe1             ; Check Stop key
+BRK_HAND    = $fed2             ; Default BRK handler
   
 ; Constants
 SPACE       = $20               ; Space
@@ -76,7 +83,7 @@ EOL         = $00               ; End of line or list
 LF          = $0d               ; Linefeed
 RVS_ON      = $12               ; Reverse on
 RVS_OFF     = $92               ; Reverse off
-CRSR_UP     = $91               ; Cursor Up
+BACKSP      = $9d               ; Backspace
 GO_CMD      = 1                 ; Basic Command - GO
 LOOK_CMD    = 2                 ;               - LOOK
 GET_CMD     = 3                 ;               - GET
@@ -86,6 +93,8 @@ IS_INVIS    = $01               ; Item Property - Invisible
 IS_UNMOVE   = $02               ;               - Unmoveable
 IS_PLHOLDER = $04               ;               - Placeholder
 IS_TIMER    = $08               ;               - Timer Display
+IS_TRIGGER  = $10               ;               - Timer Trigger
+IS_GLOBAL   = $20               ;               - Usable from Anywhere
 
 ; Initialize 
 Init:       lda #<NewGame       ; Install the custom NMI (restart)
@@ -94,7 +103,8 @@ Init:       lda #<NewGame       ; Install the custom NMI (restart)
             sta NMINV+1         ; ,, 
             lda #SCRCOL         ; Set screen color
             sta VIC+$0f         ; ,,
-            lda #242            ; Set upper/lower charset
+            lda VIC+$05         ; Set lowercase character set
+            ora #$02            ; ,,
             sta VIC+$05         ; ,,
             lda #$80            ; Disable Commodore-Shift
             sta CASECT          ; ,,
@@ -108,7 +118,6 @@ NewGame:    bit VIA1PA1         ; Reset NMI
 start:      ldx #0              ; 
             stx INVENTORY       ; Clear Inventory
             stx INVENTORY+1     ; ,,
-            stx TIMER           ; Reset timer
 -loop:      inx                 ; Copy initial room location data to     
             lda ItemRoom-1,x    ;   RAM, so it can be updated as items are
             sta ITEM_ROOMS-1,x  ;   moved around
@@ -125,7 +134,9 @@ start:      ldx #0              ;
             jsr PrintMsg        ; ,,            
             ldx #1              ; Initialize starting room id
             stx CURR_ROOM       ; ,,
-            jmp ShowRmN         ; Show room name before game starts
+            ldx #TIMER_START    ; Initialize timer
+            stx TIMER           ; ,,
+            jmp GameEntry       ; Show room name before game starts
                  
 ; Verb Not Found
 ; Show an error message, then go back for another command 
@@ -171,7 +182,7 @@ Transcribe: ldx #0              ; Buffer index
 ; Process Command
 ; Start with the Action Engine. Look through the Action Database for             
 Process:    clc                 ; Clear the action result flag
-            ror ACT_RESULT      ; ,,
+            ror ACT_SUCCESS     ; ,,
             ldx #$ff            ; Look for actions for this command's verb
 next_act:   inx                 ; ,,
             lda ActVerb,x       ; ,,
@@ -179,13 +190,16 @@ next_act:   inx                 ; ,,
             jmp PostAction      ; Game-specific actions are done
 have_verb:  cmp VERB_ID         ; ,,
             bne next_act        ; ,,
-found_verb: lda ActItem,x       ; Get the item for this action
+            lda ActItem,x       ; Get the item for this action
             beq item_ok         ;   If the action specifies no item, skip
             cmp ITEM_ID         ; Does the item match the action's item?
             bne next_act        ;   If not, go back for next action            
 item_ok:    jsr ItemInRm        ; Is the item in the room?
-            bcs ch_cond
-            jmp NotHere
+            bcs ch_cond         ;   If so, start checking conditions
+            lda ItemProp-1,x    ; If the item is not in the room, is it a
+            and #IS_GLOBAL      ;   global item?
+            beq ch_cond         ;   If so, start checking conditions
+            jmp NotHere         ; Indicate item is not around
 ch_cond:    lda ActInvCon,x     ; Is there an inventory item condition?
             beq inv_ok          ;   If not, it's unconditional
             jsr ItemInv         ; Is the player holding the specified item?
@@ -198,16 +212,14 @@ ch_excl:    lda ActInvExcl,x    ; Is there an item exclusion?
             beq success         ;   If not, the action is successful
             jsr ItemInv         ;   If so, the action is successful unless
             bcc success         ;     the item is in inventory
-failure:    sec                 ; FAILURE!
-            ror ACT_RESULT      ; Set the action result flag
-            lda ActResTxtH,x    ; Show the failure message for the action
+failure:    lda ActResTxtH,x    ; Show the failure message for the action
             beq next_act        ;   ,, (If high byte=0, it's a silent failure)
             tay                 ;   ,,
             lda ActResTxtL,x    ;   ,,
             jsr PrintAlt        ;   ,,
             jmp next_act        ;   ,,
 success:    sec                 ; SUCCESS!
-            ror ACT_RESULT      ; Set the action success flag
+            ror ACT_SUCCESS     ; Set the action success flag
             lda ActResTxtH,x    ; Show the success message for the action
             beq do_result       ;   ,, (If high byte=0, it's a silent success)
             tay                 ;   ,,
@@ -229,7 +241,12 @@ is_from:    sta FROM_ID         ; Store the From ID temporarily
             ldy FROM_ID         ; If To=0 then move the item in From ID to
             lda CURR_ROOM       ;   the current room
             sta ITEM_ROOMS-1,y  ;   ,,
-            jmp next_act        ; Contine processing
+            lda ItemProp-1,y    ; If an item moved to the current room is
+            and #IS_TRIGGER     ;   a trigger, then set the timer
+            beq not_trig        ;   ,,
+            lda #TRIGGER        ;   ,,
+            sta TIMER           ;   ,,
+not_trig:   jmp next_act        ; Contine processing
 xform:      sta TO_ID           ; Transform - Put To where From is
             ldy FROM_ID         ;   Get the From item's current location
             lda ITEM_ROOMS-1,y  ;   ,,
@@ -267,8 +284,8 @@ next_act2:  jmp next_act        ;   Check next action
 ;   - GET
 ;   - DROP   
 ;   - INVENTORY
-PostAction: bit ACT_RESULT      ; Bypass the basic actions if one or more
-            bmi h_timer         ;   database actions was attempted
+PostAction: bit ACT_SUCCESS     ; Bypass the basic actions if one or more
+            bmi h_timer         ;   database actions was successful
             lda VERB_ID         ; Get the entered verb
             cmp #GO_CMD         ; Handle GO/MOVE
             bne ch_look         ; ,,
@@ -286,7 +303,7 @@ ch_drop:    cmp #DROP_CMD       ; Handle DROP
             bne no_cmd          ; ,,
             jmp DoDrop          ; ,,
 no_cmd:     jmp Nonsense        ; Error message if no match
-h_timer:    jsr AdvTimer        ; Advance timer
+h_timer:    jsr AdvTimer        ; Timer countdown or advance
 post_r:     jmp Main            ; Return to Main main routine
 
 ; Do Drop
@@ -306,40 +323,25 @@ drop_now:   tax                 ; X is the item index
             lda #0              ; Remove it from the hand it's in
             sta INVENTORY,y     ; ,,
             jsr Confirm         ; Show the confirmation message
-            jmp Main            ; Return to Main routine
+drop_r:     jmp Main            ; Return to Main routine
 
 ; Do Look                        
 DoLook:     lda ITEM_ID         ; Get the current item id
-            beq ShortRoom       ; If there's an item id, then interpret LOOK
-has_item:   jmp look_item       ;   as a request to look at that item
-ShortRoom:  jsr RoomName
+            bne SingleItem      ; If there's an item id, then interpret LOOK
+RoomDesc:   jsr NormCol
+            jsr RoomName
             jsr PrintAlt
-            ; Directional display
-show_dir:   jsr SetRmAddr       ; Get room address to (RM)
-            ldy #5              ; 5 is room index for North parameter
--loop:      lda (RM),y          ; Get room id for room in this direction
-            beq next_dir        ; Is there a room that way?
-            lda #RVS_ON         ; Reverse on
-            jsr CHROUT           ; ,,
-            lda Directions,y    ; If so, get the character
-            ora #$80            ;   make it uppercase
-            jsr CHROUT          ;   and print it
-            lda #RVS_OFF        ; Reverse off
-            jsr CHROUT          ; ,,
-            lda #' '
-            jsr CHROUT          
-next_dir:   dey                 ; Get next direction
-            bpl loop            ;   until done            
-dir_end:    jsr Linefeed        ; 2 x Linefeed  
-            jsr Linefeed        ; ,,  
+            ; Fall through to ItemDisp
+
             ; Item display
+ItemDisp:   jsr Linefeed
             lda #COL_ITEM       ; Set item color
             jsr CHROUT          ; ,,
             ldx #0              ; X is the item index
 next_item:  lda CURR_ROOM
             inx                 ; ,,
             cpx END_ITEM        ; Has the last item been reached?
-            beq look_r          ;   If so, move back to input main routine
+            beq DirDisp         ;   If so, show directional display
             cmp ITEM_ROOMS-1,x  ; Is the indexed item in the current room?
             bne next_item       ;   If not, check next item
             lda ItemProp-1,x    ; The item is in the current room, but is it
@@ -349,8 +351,32 @@ next_item:  lda CURR_ROOM
             ldy ItemTxtH-1,x    ; ,,
             jsr PrintNoLF       ; ,,
             jmp next_item       ; Go to the next item
+            
+            ; Directional display
+DirDisp:    lda #COL_DIR
+            jsr CHROUT
+            lda #'('            ; Open paren
+            jsr CHROUT          ; ,,
+            jsr SetRmAddr       ; Get room address to (RM)
+            ldy #5              ; 5 is room index for North parameter
+-loop:      lda (RM),y          ; Get room id for room in this direction
+            beq next_dir        ; Is there a room that way?
+            lda Directions,y    ; If so, get the character
+            ora #$80            ;   make it uppercase
+            jsr CHROUT          ;   and print it
+            lda #','
+            jsr CHROUT
+next_dir:   dey                 ; Get next direction
+            bpl loop            ;   until done            
+dir_end:    lda #BACKSP
+            jsr CHROUT
+            lda #')'            ; Close paren
+            jsr CHROUT          ; ,,
+            jsr Linefeed        ; Linefeed 
+            jmp Main
+            
             ; Look at a single item
-look_item:  jsr ItemInRm        ; The LOOK command took an item id. Is that item
+SingleItem: jsr ItemInRm        ; The LOOK command took an item id. Is that item
             bcs in_room         ;   in the current room?
 NotHere:    lda #<NotHereTx     ; If the specified item isn't in the room or
             ldy #>NotHereTx     ;   inventory, show a message and go back
@@ -360,33 +386,33 @@ in_room:    tax                 ; X = specified item id
             tay                 ; ,,
             lda ItemTxtL-1,x    ; ,,
             jsr PrintAlt        ; ,,
-            lda ItemProp-1,x
-            and #IS_TIMER
-            beq look_r
-            ldx #HOUR_OFFSET
-            lda TIMER
-sub_hour:   cmp #59
-            bcc lt_hour
-            sec
-            sbc #60
-            inx
-            bne sub_hour
-lt_hour:    pha
-            lda #0
-            jsr PRTFIX
-            lda #':'
-            jsr CHROUT
-            pla
-            cmp #10
-            bcs show_min
-            pha
-            lda #'0'
-            jsr CHROUT
-            pla
-show_min:   tax
-            lda #0
-            jsr PRTFIX
-            jsr Linefeed
+            lda ItemProp-1,x    ; If this object is a timer, show its current
+            and #IS_TIMER       ;   value
+            beq look_r          ;   ,,
+            ldx #TIME_OFFSET    ; X is the number of "hours" in the display    
+            lda TIMER           ; Get the timer value
+sub_hour:   cmp #60             ; Divide by 60
+            bcc lt_hour         ; ,,
+            sec                 ; ,,
+            sbc #60             ; ,,
+            inx                 ; ,,
+            bne sub_hour        ; ,,
+lt_hour:    pha                 ; Show the hour display (X=low byte)
+            lda #0              ; ,,
+            jsr PRTFIX          ; ,,
+            lda #':'            ; Colon for the timer
+            jsr CHROUT          ; ,,
+            pla                 ; A is the minutes part
+            cmp #10             ; If < 10, pad zero
+            bcs show_min        ; ,,
+            pha                 ; ,,
+            lda #'0'            ; ,,
+            jsr CHROUT          ; ,,
+            pla                 ; Get back minutes part and transfer
+show_min:   tax                 ;   to X for printing
+            lda #0              ; High byte is 0 (because value is 0-60)
+            jsr PRTFIX          ; Print the number
+            jsr Linefeed        ; Finish with linefeed
 look_r:     jmp Main            ; Return to Main routine
 
 ; Do Go           
@@ -404,19 +430,24 @@ ShortGo     jsr SetRmAddr       ; Get room address to (RM)
 try_move:   lda (RM),y          ; Get the room id at the found index
             beq go_fail         ; Player is going an invalid direction
             sta CURR_ROOM       ; But if direction is valid, set room
-            jsr AdvTimer        ; Advance Timer on move
-ShowRmN:    lda #COL_ROOM       ; Always show room name after move
+            jsr AdvTimer        ; Timer advance or countdown on move
+GameEntry:  lda #COL_ROOM       ; Always show room name after move
             jsr CHROUT          ; ,,
             jsr Linefeed        ; ,,
             jsr RoomName        ; ,,
-            jsr PrintMsg        ; ,,
-            ldx CURR_ROOM       ; Is this the first time this room has been
+            jmp PrintMsg        ; ,,
+            jsr SetRmAddr       ; Is there an entry action for this room?
+            ldy #8              ; ,,
+            lda (RM),y          ; ,,
+            beq ch_visited      ; ,,
+            tax                 ; If so, set action and
+            jmp ch_cond         ;   attempt it
+ch_visited: ldx CURR_ROOM       ; Is this the first time this room has been
             lda SEEN_ROOMS-1,x  ;   visited?
-            bne go_r            ; Already been visitied, so show only name
+            bne go_r            ; Already been visitied, so check action
             lda #1              ; Otherwise, flag the room as seen, and
-            sta SEEN_ROOMS-1,x  ;   show everything else (description, items,
-            jsr NormCol         ;   directional display)
-            jmp ShortRoom       ;   ,,
+            sta SEEN_ROOMS-1,x  ;   show everything else
+            jmp RoomDesc        ; Show room description
 invalid:    jmp ShowErr         ; Like Nonsense, but don't look at shortcuts
 go_fail:    lda #<NoPathTx      ; Show "no path" message and return to Main
             ldy #>NoPathTx      ; ,,
@@ -573,7 +604,7 @@ SetRmAddr:  lda #<Rooms         ; Set starting room address
             ldx CURR_ROOM       ; X = room id
             dex                 ; zero-index it
             beq setaddr_r       ; if first room, (RM) is already set
--loop:      lda #8              ; Add 8 for each id
+-loop:      lda #9              ; Add 8 for each id
             clc                 ; ,,
             adc RM              ; ,,
             sta RM              ; ,,
@@ -595,19 +626,19 @@ RoomName:   jsr SetRmAddr       ; Get room address to (RM)
             tay                 ; Y is now high byte (for PrintMsg)
             pla                 ; A is now low byte (for PrintMsg)
             rts
-
+             
 ; Advance Timer            
-AdvTimer:   inc TIMER           ; Increment game timer
-            beq timer_r         ; If it's zero, ignore the time
-            lda TIMER           ; Did the timer match the deadline?
-            cmp #TIME_LIMIT     ; ,,
-            bne timer_r         ; If not, do nothing         
-            lda #<TimeTx        ; Show the time-out message
-            ldy #>TimeTx        ; ,,
-            jsr PrintMsg        ; ,,
-            pla                 ; This is from a JSR, so clear the return
+AdvTimer:   lda TIMER           ; If the timer is 0, then it's not active
+            beq timer_r         ; ,,
+            clc                 ; Add to timer
+            adc #TIMER_DIR      ;   $01 for +1, $ff for -1
+            sta TIMER
+            cmp #TIMER_TGT      ; Has timer hit the target?
+            bne timer_r         ; ,,
+            pla                 ; This was called via JSR, so pull the return
             pla                 ;   address off the stack
-            jmp game_over       ; Game Over
+            ldx #TIMEOUT_ACT    ; Do the specified timeout action
+            jmp ch_cond         ; ,,
 timer_r:    rts
             
 ; Print Alternate Message
@@ -651,7 +682,7 @@ Linefeed:   lda #LF
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; TEST GAME DATA
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;   
-Directions: .asc 'DUWESN'
+Directions: .asc 'DUEWSN'
 
 ; Text - Game Messages, Errors, etc.
 Intro:      .asc 147,COL_NORM,"tHE SUN BEATS DOWN",LF,"ON YOU. yOU DON'T",LF
@@ -675,15 +706,18 @@ TimeTx:     .asc COL_ALERT,"oUT OF TIME!",EOL
 ; Basic - GO (MovE), LooK (L), GeT (TakE), DroP, InventorY (I)
 ; Extended - swim,dig,drink,wish,raise(pull),open(unlock)
 Verb1:      .byte "G","M","L","L","G","T","D","I","I"     ; Basic Verbs
+            .byte "E","P","S",EOL
 VerbL:      .byte "O","E","K","L","T","E","P","Y","I"     ; Basic Verbs
+            .byte "R","H","N"
 VerbID:     .byte 1,1,2,2,3,3,4,5,5                       ; Basic Verbs
+            .byte 1,6,7
 
 ; Rooms
-;                 D U W E S N Desc. Low Addr, Desc. High Addr
-Rooms:      .byte 0,2,0,3,0,0,<RForest,>RForest
-            .byte 1,0,0,0,0,0,<RTree,>RTree
-            .byte 0,0,1,3,0,0,<RRiverside,>RRiverside
-            .byte 0,0,0,0,0,3,<RCave,>RCave
+;                 D, U, E, W, S, N, DescL, DescH, ActID
+Rooms:      .byte 0,2,3,0,0,0,<RForest,>RForest,0
+            .byte 1,0,0,0,0,0,<RTree,>RTree,1
+            .byte 0,0,0,1,0,0,<RRiverside,>RRiverside,0
+            .byte 1,1,1,1,1,3,<RCave,>RCave,0
 
 ; Room Descriptions
 ;     The room name is terminated by EOL, after which is the room description,
@@ -702,22 +736,28 @@ RCave:      .asc "cAVE",EOL,"tOO DARK TO SEE!",EOL
 ;     Bit 1 = Is un-moveable (cannot move from its room)
 ;     Bit 2 = Is placeholder (cannot be used as an item)
 ;     Bit 3 = Is timekeeping device (shows number of action attempts) 
+;     Bit 4 = Is trigger for timer (when this item is moved to a room, the
+;             timer starts)
+;     Bit 5 = Is global (can be interacted with from a different room)
 ;   ItemTxt  - Address of item name and description
 ;   (The item name is terminated by EOL, after which is the item description,
 ;    also terminated by EOL)
 ; 
-Item1:      .byte 'W','C','S','C',EOL
-ItemL:      .byte 'H','E','D','K',EOL
-ItemRoom:   .byte  1 , 3,  1,  2, EOL
-ItemProp:   .byte  8 , 3,  0,  0, EOL
-ItemTxtL:   .byte <IWatch,<ICave,<ISword,<ICloak,EOL
-ItemTxtH:   .byte >IWatch,>ICave,>ISword,>ICloak,EOL
+Item1:      .byte 'W','C','S','C','F','B','F',EOL
+ItemL:      .byte 'H','E','D','K','E','N','N'
+ItemRoom:   .byte  0 , 3,  1,  2,  0,  1, '0'
+ItemProp:   .byte 24 , 3,  0,  0,  0,  2, $22
+ItemTxtL:   .byte <IWatch,<ICave,<ISword,<ICloak,<IFlute,<IButton,<IFalcon
+ItemTxtH:   .byte >IWatch,>ICave,>ISword,>ICloak,>IFlute,>IButton,>IFalcon
 
 ; Item Descriptions
 IWatch:     .asc "cHEAP watch",EOL,"tHE MINUTE HAND SAYS",EOL
 ICave:      .asc "cave",EOL,"a SMALL CAVE ENTRANCE",EOL
-ISword:     .asc "sWORD",EOL,"sHARP AND STABBY",EOL
+ISword:     .asc "sword",EOL,"sHARP AND STABBY",EOL
 ICloak:     .asc "iNVISIBLE cLOAK",EOL,"yOU CANNOT SEE IT",EOL
+IFlute:     .asc "sILVER FLUTE",EOL,"cAN YOU PLAY IT?",EOL
+IButton:    .asc "button",EOL,"pANIC-BUTTON RED!",LF,"iNVITES PUSHING...",EOL
+IFalcon:    .asc "falcon",EOL,"tHE fALCON IS IN THE",LF,"SKY",EOL
 
 ; Actions
 ;   ActVerb    - The Verb ID for this action
@@ -729,7 +769,7 @@ ICloak:     .asc "iNVISIBLE cLOAK",EOL,"yOU CANNOT SEE IT",EOL
 ;                ActHoldCon and ActRoomCon are non-0, then both conditions must
 ;                be met for the action to be successful. Note that this item may
 ;                be in inventory.
-;   ActInvExlc - The player must NOT be holding this Item ID for success in this
+;   ActInvExcl - The player must NOT be holding this Item ID for success in this
 ;                action. If 0, no item is excluded.
 ;   ActFrom    - If the action is successful, specifies an item that can be
 ;                changed to another item.
@@ -751,15 +791,19 @@ ICloak:     .asc "iNVISIBLE cLOAK",EOL,"yOU CANNOT SEE IT",EOL
 ;   ActResTxt  - The address of the success and failure messasges
 ;                (The success message is terminated by EOL, after which is the
 ;                 failure message, also terminated by EOL)
-ActVerb:    .byte GO_CMD,EOL
-ActItem:    .byte 2,EOL
-ActInvCon:  .byte 0,EOL
-ActRoomCon: .byte 0,EOL
-ActInvExcl: .byte 3,EOL
-ActFrom:    .byte 0,EOL
-ActTo:      .byte 4,EOL
-ActResTxtL: .byte <ACave
-ActResTxtH: .byte >ACave
+ActVerb:    .byte GO_CMD,$ff,6,7,DROP_CMD,EOL
+ActItem:    .byte 2,0,6,7,1
+ActInvCon:  .byte 0,0,0,0,0
+ActRoomCon: .byte 0,0,0,0,0
+ActInvExcl: .byte 3,0,0,3,1
+ActFrom:    .byte 0,3,1,7,1
+ActTo:      .byte 4,5,0,0,1
+ActResTxtL: .byte <ACave,<AFlute,<AButton,<AFalcon,<ADrWatch,EOL
+ActResTxtH: .byte >ACave,>AFlute,>AButton,>AFalcon,>ADrWatch,EOL
 
 ; Action Results
 ACave:      .asc "yOU ENTER THE CAVE",EOL,"nOT WITH THAT SWORD!",EOL
+AFlute:     .asc "sWORD TO fLUTE!",EOL,"Hmmm",EOL
+AButton:    .asc "tHE TIMER HAS STARTED",EOL,"Nothing happens",EOL
+AFalcon:    .asc "a FALCON FLIES ABOVE",EOL,"iT HATES THE SWORD",EOL
+ADrWatch:   .asc "yOU CANNOT DROP IT",EOL,"dROPPED",EOL
