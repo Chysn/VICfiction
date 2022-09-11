@@ -99,6 +99,7 @@ LF          = $0d               ; Linefeed
 RVS_ON      = $12               ; Reverse on
 RVS_OFF     = $92               ; Reverse off
 BACKSP      = $9d               ; Backspace
+CLRHOME     = $93               ; CLEAR/HOME
 GO_CMD      = 1                 ; Basic Command - GO
 LOOK_CMD    = 2                 ;               - LOOK
 GET_CMD     = 3                 ;               - GET
@@ -234,6 +235,8 @@ ch_excl:    lda ActInvExcl,x    ; Is there an item exclusion?
             bcc success         ;     the item is in inventory
 failure:    sec                 ; FAILURE!
             ror ACT_FAILURE     ; Set the action failure flag
+            bit ACT_SUCCESS     ; If a previous success message was shown,
+            bmi next_act        ;   suppress the failure message
             lda ActResTxtH,x    ; Show the failure message for the action
             beq next_act        ;   ,, (If high byte=0, it's a silent failure)
             tay                 ;   ,,
@@ -360,55 +363,7 @@ drop_r:     jmp Main            ; Return to Main routine
 ; Do Look                        
 DoLook:     lda ITEM_ID         ; Get the current item id
             bne SingleItem      ; If there's an item id, then LOOK at it
-RoomDesc:   jsr NormCol         ; Otherwise look refers to a whole room
-            jsr RoomName        ; Show its name
-            jsr PrintAlt        ; ,,
-            ; Fall through to ItemDisp
-
-            ; Item display
-ItemDisp:   jsr Linefeed
-            lda #COL_ITEM       ; Set item color
-            jsr CHROUT          ; ,,
-            ldx #0              ; X is the item index
-next_item:  inx                 ; ,,
-            lda Item1-1,x       ; Has the last item been reached?
-            beq DirDisp         ;   If so, show directional display
-            lda CURR_ROOM                        
-            cmp ITEM_ROOMS-1,x  ; Is the indexed item in the current room?
-            bne next_item       ;   If not, check next item
-            lda ItemProp-1,x    ; The item is in the current room, but is it
-            and #IS_INVIS       ;   visible?
-            bne next_item       ;   If not, check the next item
-            lda ItemTxtL-1,x    ;   ,,
-            ldy ItemTxtH-1,x    ;   ,,
-            jsr PrintNoLF       ;   ,,
-            jmp next_item       ; Go to the next item
-            
-            ; Directional display
-DirDisp:    lda #COL_DIR
-            jsr CHROUT
-            lda #'('            ; Open paren
-            jsr CHROUT          ; ,,
-            jsr SetRmAddr       ; Get room address to (RM)
-            ldy #5              ; 5 is room index for North parameter
--loop:      lda (RM),y          ; Get room id for room in this direction
-            beq next_dir        ; Is there a room that way?
-            lda Directions,y    ; If so, get the character
-            ora #$80            ;   make it uppercase
-            jsr CHROUT          ;   and print it
-            lda #','
-            jsr CHROUT
-next_dir:   dey                 ; Get next direction
-            bpl loop            ;   until done            
-dir_end:    lda #BACKSP
-            jsr CHROUT
-            lda #')'            ; Close paren
-            jsr CHROUT          ; ,,
-            jsr Linefeed        ; Linefeed 
-            
-            ; Show Score (if necessary)
-            jsr ShowScore
-
+            jsr RoomDesc        ; Show room desciption
             jmp Main            
             ; Look at a single item
 SingleItem: jsr ItemInRm        ; The LOOK command took an item id. Is that item
@@ -471,18 +426,18 @@ GameEntry:  lda #COL_ROOM       ; Always show room name after move
             jsr Linefeed        ; ,,
             jsr RoomName        ; ,,
             jsr PrintMsg        ; ,,
+ch_visited: ldx CURR_ROOM       ; Is this the first time this room has been
+            lda SEEN_ROOMS-1,x  ;   visited?
+            bne ch_rm_act       ; Already been visitied, so check action
+            lda #1              ; Otherwise, flag the room as seen, and
+            sta SEEN_ROOMS-1,x  ;   show everything else
+            jsr RoomDesc        ; Show room description
 ch_rm_act:  jsr SetRmAddr       ; Is there an entry action for this room?
             ldy #8              ; ,,
             lda (RM),y          ; ,,
-            beq ch_visited      ; ,,
+            beq go_r            ; ,,
             tax                 ; If so, set action and
-            jmp DoEvent         ;   attempt it
-ch_visited: ldx CURR_ROOM       ; Is this the first time this room has been
-            lda SEEN_ROOMS-1,x  ;   visited?
-            bne go_r            ; Already been visitied, so check action
-            lda #1              ; Otherwise, flag the room as seen, and
-            sta SEEN_ROOMS-1,x  ;   show everything else
-            jmp RoomDesc        ; Show room description
+            jmp DoEvent         ;   attempt it            
 invalid:    jmp ShowErr         ; Like Nonsense, but don't look at shortcuts
 go_fail:    lda #<NoPathTx      ; Show "no path" message and return to Main
             ldy #>NoPathTx      ; ,,
@@ -676,6 +631,53 @@ AdvTimer:   lda TIMER           ; If the timer is 0, then it's not active
             jmp DoEvent         ; ,,
 timer_r:    rts
 
+RoomDesc:   jsr NormCol         ; Otherwise look refers to a whole room
+            jsr RoomName        ; Show its name
+            jsr PrintAlt        ; ,,
+            ; Fall through to ItemDisp
+
+            ; Item display
+ItemDisp:   jsr Linefeed
+            lda #COL_ITEM       ; Set item color
+            jsr CHROUT          ; ,,
+            ldx #0              ; X is the item index
+next_item:  inx                 ; ,,
+            lda Item1-1,x       ; Has the last item been reached?
+            beq DirDisp         ;   If so, show directional display
+            lda CURR_ROOM                        
+            cmp ITEM_ROOMS-1,x  ; Is the indexed item in the current room?
+            bne next_item       ;   If not, check next item
+            lda ItemProp-1,x    ; The item is in the current room, but is it
+            and #IS_INVIS       ;   visible?
+            bne next_item       ;   If not, check the next item
+            lda ItemTxtL-1,x    ;   ,,
+            ldy ItemTxtH-1,x    ;   ,,
+            jsr PrintNoLF       ;   ,,
+            jmp next_item       ; Go to the next item
+            
+            ; Directional display
+DirDisp:    lda #COL_DIR
+            jsr CHROUT
+            lda #'('            ; Open paren
+            jsr CHROUT          ; ,,
+            jsr SetRmAddr       ; Get room address to (RM)
+            ldy #5              ; 5 is room index for North parameter
+-loop:      lda (RM),y          ; Get room id for room in this direction
+            beq next_dir        ; Is there a room that way?
+            lda Directions,y    ; If so, get the character
+            ora #$80            ;   make it uppercase
+            jsr CHROUT          ;   and print it
+            lda #','
+            jsr CHROUT
+next_dir:   dey                 ; Get next direction
+            bpl loop            ;   until done            
+dir_end:    lda #BACKSP
+            jsr CHROUT
+            lda #')'            ; Close paren
+            jsr CHROUT          ; ,,
+            jsr Linefeed        ; Linefeed 
+            ; Fall through to ShowScore
+
 ; Show Score
 ShowScore:  ldx #0              ; X is the item index
             stx SCORE           ; And reset score
@@ -762,8 +764,8 @@ Linefeed:   lda #LF
 Directions: .asc 'DUEWSN'
 
 ; Text - Game Messages, Errors, etc.
-Intro:      .asc 147,COL_NORM,"yOU ARRIVE AT WORK",LF,"IN THE USUAL WAY, BY",LF
-            .asc "cURSOR. aFTER ALL,",LF,"YOU LIVE IN 1841. yOU",LF
+Intro:      .asc CLRHOME,COL_NORM,"yOU ARRIVE AT WORK",LF,"IN THE USUAL WAY, BY"
+            .asc LF,"CURSOR. aFTER ALL,",LF,"YOU LIVE IN 1841. yOU",LF
             .asc "ONLY work IN 6205.",LF,LF,"yOU STRAIGHEN YOUR",LF
             .asc "GLASSES AND GLANCE AT",LF,"YOUR QUOTA SHEET.",LF,LF
             .asc "dAMN BUSY DAY AHEAD.",LF,LF,
@@ -783,40 +785,52 @@ ConfirmTx:  .asc COL_ALERT,"ok",EOL
 ; Verbs
 ;   VerbID - Cross-referenced ID list for verb synonyms
 ; Basic - GO (MovE), LooK (L), GeT (TakE), DroP, InventorY (I)
-; Game - TALK(6), SQUEEZE(7), ENTER(8), SET(2), SWAP(9)
+; Game - TALK(6), WIND(7), DIAL(8), SET(2), SWAP(9), BUY(10)
 ; Verb IDs are 1-indexed
 Verb1:      .byte 'G','M','L','L','G','T','D','I','I'     ; Basic Verbs
-            .byte 'T','S','E','R','S',EOL
+            .byte 'T','W','D','R','S','B','C',EOL
 VerbL:      .byte 'O','E','K','L','T','E','P','Y','I'     ; Basic Verbs
-            .byte 'K','E','R','D','P'
+            .byte 'K','D','L','D','P','Y','H'
 VerbID:     .byte 1,1,2,2,3,3,4,5,5                       ; Basic Verbs
-            .byte 6,7,8,2,9
+            .byte 6,7,8,2,9,10,11
 
 ; Rooms
-;                 D, U, E, W, S, N, DescL, DescH, ActID
 ; Room IDs are 1-indexed
 Rooms:      ; Main Facility
+            ;     D, U, E, W, S, N, DescL, DescH, ActID
             .byte 2, 0, 0, 0, 0, 0,<rIntake,>rIntake,0
             .byte 0, 1, 3, 0, 0, 0,<rOffice,>rOffice,0
             .byte 0, 0, 0, 2, 0, 0,<rPlaza,>rPlaza,2
             
             ; Graff House, 1776
+            ;     D, U, E, W, S, N, DescL, DescH, ActID
             .byte 0, 0, 5, 0, 0, 0,<rCorner,>rCorner,0
-            .byte 0, 7, 0, 0, 0, 0,<rFoyer,>rFoyer,0 
+            .byte 0, 7, 0, 4, 0, 0,<rFoyer,>rFoyer,0 
             .byte 5, 0, 0, 0, 0, 7,<rJeffRoom,>rJeffRoom,0 
             .byte 5, 0, 0, 0, 6, 8,<rLanding,>rLanding,0
             .byte 0, 0, 0, 0, 7, 0,<rJeffBed,>rJeffBed,0
+            
+            ; Navin Field, 1934
+            ;     D, U, E, W, S, N, DescL, DescH, ActID
+            .byte 0, 0, 0, 0, 0,14,<rTBooth,>rTBooth,0
+            .byte 0, 0,11,13,14,12,<rHomeSt,>rHomeSt,18
+            .byte 0, 0, 0,12,10, 0,<rRightF,>rRightF,14
+            .byte 0, 0,11,13,10, 0,<rCenterF,>rCenterF,18
+            .byte 0, 0,12, 0,10, 0,<rLeftF,>rLeftF,0
+            .byte 0, 0, 0, 0, 9,10,<rCorridor,>rCorridor,11
+            .byte 0, 0,15,15, 0, 0,<rJail,>rJail,0
 
 ; Room Descriptions
 ;     The room name is terminated by EOL, after which is the room description,
 ;     also terminated by EOL
 rIntake:    .asc "iNTAKE rOOM",EOL,"tHIS CIRCULAR ROOM IS",LF
-            .asc "YOUR WORK AREA. tHE",LF,"cURSOR OCCUPIES THE",LF
-            .asc "EXACT CENTER OF THE",LF,"ROOM. tHE cONSOLE IS",LF
-            .asc "ABOUT A METER AWAY.",LF,LF,"a LADDER LEADS DOWN.",EOL
-rOffice:    .asc "bOSS'S OFFICE",EOL,"tHE bOSS ISN'T ALWAYS",LF
+            .asc "YOUR WORK AREA. tHE",LF,"CURSOR DOMINATES THE",LF
+            .asc "EXACT CENTER OF THE",LF,"SPACE. tHE CONSOLE IS",LF
+            .asc "ABOUT A LEROC AWAY.",LF,LF,"a LADDER TUBE LEADS",LF
+            .asc "DOWN TO aDMIN.",EOL
+rOffice:    .asc "bOSS'S oFFICE",EOL,"tHE bOSS ISN'T ALWAYS",LF
             .asc "IN, BUT SHE IS TODAY,",LF,"AND SHE GIVES YOU A",LF
-            .asc "SLIGHT NOD AS YOU",LF,"EXIT THE LADDER.",LF
+            .asc "SLIGHT NOD AS YOU",LF,"EXIT THE LADDER.",LF,LF
             .asc "'dAMN BUSY DAY,",LF,"TODAY,' SHE SAYS.",LF,LF
             .asc "tHE DOOR TO THE EAST",LF,"IS MARKED WITH A HUGE",LF
             .asc "RED EXLAMATION POINT.",EOL
@@ -824,13 +838,14 @@ rPlaza:     .asc "pLAZA",EOL,"WHAT?",EOL
 
             ; Graff House, 1776
 rCorner:    .asc "cORNER",EOL,"tHE CORNER OF 7TH AND",LF,"mARKET sTREET IN",LF
-            .asc "pHILADELPHIA, usa. a",LF,"LARGE HOUSE WITH AN",LF
+            .asc "pHILADELPHIA, usa. a",LF,"NEW HOUSE WITH AN",LF
             .asc "INTRICATE fLEMISH",LF,"bOND BRICK PATTERN",LF
-            .asc "DOMINATES THE CORNER.",LF,LF,"tHERE'S AN ENTRYWAY",LF
-            .asc "ON THE WEST SIDE.",EOL
-rFoyer:     .asc "fOYER",EOL,"tHE WHOLE OF gRAFF",LF,"hOUSE IS CLEARLY",LF
-            .asc "NEW CONSTRUCTION,",LF,"LOVINGLY DESIGNED AND",LF
-            .asc "BUILT BY ITS OCCUPANT",LF,"AND LANDLORD.",LF,LF
+            .asc "ADORNS THE CORNER.",LF,LF,"tHERE'S AN ENTRYWAY",LF
+            .asc "ON THE WEST FRONT.",EOL
+rFoyer:     .asc "fOYER, gRAFF hOUSE",EOL,"tHE WHOLE OF gRAFF",LF
+            .asc "hOUSE IS CLEARLY",LF,"NEW CONSTRUCTION,",LF
+            .asc "LOVINGLY DESIGNED AND",LF,"BUILT BY ITS OCCUPANT",LF
+            .asc "AND LANDLORD.",LF,LF
             .asc "tHERE'S A STAIRWAY",LF,"UP, BUT THE REST OF",LF
             .asc "THE HOUSE IS LOCKED",LF
             .asc "OFF.",EOL            
@@ -840,9 +855,34 @@ rJeffRoom:  .asc "pARLOR",EOL,"sOMEBODY IS DOING A",LF,"LOT OF WRITING HERE.",LF
             .asc "LINEN IS STAINED BY",LF,"INK. a WASTEBASKET",LF
             .asc "BRIMS WITH REJECTED",LF,"DRAFTS READING 'iN",LF
             .asc "cONGRESS.'",EOL   
-rJeffBed:   .asc "bED CHAMBER",EOL,"tHE BED IS NEATLY",LF
+rJeffBed:   .asc "bED cHAMBER",EOL,"tHE BED IS NEATLY",LF
             .asc "MADE. wHOEVER RENTS",LF,"THIS ROOM DOESN'T",LF
             .asc "SLEEP MUCH.",EOL
+rTBooth:    .asc "tICKET bOOTH",EOL,"nAVIN fIELD, dETROIT.",LF,LF
+            .asc "tODAY THE tIGERS ARE",LF,"PLAYING THE yANKEES",LF
+            .asc "WITH bABE rUTH. tHIS",LF,"IS A SPECIAL DAY.",LF,LF
+            .asc "a FRECKLY KID AT THE",LF,"COUNTER IS BARKING,",LF
+            .asc "'tICKETS! gET YOUR",LF,"TICKETS hERE!'",EOL
+rHomeSt:    .asc "hOME pLATE sTANDS",EOL,"tHE GREEN OF THE",LF
+            .asc "DIAMOND IS SOMETHING",LF,"YOU'LL NEVER FORGET,",LF
+            .asc "AS ARE THE SOUNDS OF",LF,"THE BAT AND THE SMELL",LF
+            .asc "OF THE ALMONDS.",LF,LF,"bUT YOU DON'T WANT TO",LF
+            .asc "BE BEHIND THE PLATE.",LF,"yOU KNOW WHERE TO GET",LF
+            .asc "WHAT YOU CAME FOR.",EOL
+rRightF:    .asc "rIGHT fIELD sTANDS",EOL,"tHE CROWD ROARS.",EOL
+rCenterF:   .asc "cENTER fIELD sTANDS",EOL,"tHE CROWD OUT HERE IS",LF
+            .asc "RAUCOUS, EVEN FOR",LF,"dETROIT. yOU'RE",LF
+            .asc "ENJOYING THE",LF,"ATMOSPHERE BUT YOU",LF
+            .asc "KNOW bAM HIT TO",LF,"RIGHT.",EOL
+rLeftF:     .asc "lEFT fIELD sTANDS",EOL,"eVERYBODY IS",LF
+            .asc "ANTICIPATING THE BIG",LF,"MOMENT. kIDS WITH",LF
+            .asc "GLOVES PACK THE",LF,"STANDS. yOU KNOW",LF
+            .asc "THEY'LL SOON BE SAD",LF,"ABOUT BEING ON THE",LF
+            .asc "WRONG SIDE OF THE",LF,"PARK.",EOL
+rCorridor:  .asc "cORRIDOR",EOL,"sTANDS ARE TO THE",LF,"NORTH.",EOL
+rJail:      .asc "dETROIT jAIL",EOL,"tHE CELL IS LIKE 1x1",LF
+            .asc "LEROC. iT'S SUPER",LF,"EMBARASSING.",LF,LF
+            .asc "hOPEFULLY YOU HAVE",LF,"YOUR REEL.",EOL
             
 ; Items
 ;   Item1    - First Character
@@ -862,55 +902,70 @@ rJeffBed:   .asc "bED CHAMBER",EOL,"tHE BED IS NEATLY",LF
 ;    also terminated by EOL)
 ; 
 ; Item IDs are 1-indexed
-Item1:      .byte 'C','C','B','R','Q','W','1','D','1','C','J','J',EOL
-ItemL:      .byte 'R','E','S','L','A','H','6','K','1','L','N','N'
-ItemRoom:   .byte  1 , 1,  2 , 2 , 1 , 0,  1 , 6 , 1 , 1 , 6 , 0
-ItemProp:   .byte  3 , 3,  3 , 0 , 0 , 8,  3 ,$40, 3 , 0 , 7 , 2
+Item1:      .byte 'C','C','B','R','Q','W','1','D','1','P','*','J','B'
+            .byte 'T','S','1','G','*','*','*',EOL
+ItemL:      .byte 'R','E','S','L','A','H','6','K','1','E','*','N','L'
+            .byte 'T','E','4','E','*','*','*'
+ItemRoom:   .byte  1 , 1,  2 , 2 , 1 , 0,  1 , 6 , 1 , 1 , 6 , 0 , 0
+            .byte  1 , 8,  1 ,13 ,11 , 0,  0
+ItemProp:   .byte  3 , 3,  3 , 0 , 0 , 8,  3 ,$40, 3 , 0 , 7 , 2 ,$40
+            .byte  0 , 0,  3 , 1 , 7 , 7,  7
 ItemTxtL:   .byte <iCursor,<iConsole,<iBoss,<iReel,<iQuota,<iWatch,<iYear
-            .byte <iDesk,<iYear,<iCell,0,<iJefferson
+            .byte <iDesk,<iYear,<iPhone,0,<iJefferson,<iBall,<iTicket
+            .byte <iSixpence,<iYear,<iGlove,0,0,0
 ItemTxtH:   .byte >iCursor,>iConsole,>iBoss,>iReel,>iQuota,>iWatch,>iYear
-            .byte >iDesk,>iYear,>iCell,0,>iJefferson
-
+            .byte >iDesk,>iYear,>iPhone,0,>iJefferson,>iBall,>iTicket
+            .byte >iSixpence,>iYear,>iGlove,0,0,0
 ; Item Descriptions
-iCursor:    .asc "cURSOR",EOL,"iT'S A BIG GREY TUBE",LF,"WITH A BUNCH OF",LF
-            .asc "COLORFUL BLINKING",LF,"LIGHTS, IN THE EXACT",LF
-            .asc "CENTER OF THIS ROOM,",LF,"EXTENDING ALL THE WAY",LF
-            .asc "TO THE CEILING.",LF,LF,"tHE bOSS TRIED TO",LF
-            .asc "EXPLAIN HOW IT WORKS",LF,"ONCE. hAD TO DO WITH",LF,
-            .asc "BUBBLES. iT GETS YOU",LF
+iCursor:    .asc "cURSOR",EOL,"tHE CURSOR LOOKS LIKE",LF
+            .asc "A STEAM ENGINE",LF,"STUFFED IN A TUXEDO.",LF
+            .asc "sEVERAL WHEELS SPIN",LF,"AT VARYING SPEEDS.",LF
+            .asc "tUBES AND VALVES ARE",LF,"EVERYWHERE.",LF,LF
+            .asc "tHE bOSS TRIED TO",LF,"EXPLAIN HOW IT WORKS",LF
+            .asc "ONCE. hAD TO DO WITH",LF,"BUBBLES. iT GETS YOU",LF
             .asc "FROM WHEN TO WHEN.",EOL
 iConsole:   .asc "cONSOLE",EOL,"yOU'D THINK THEY'D",LF
-            .asc "HAVE FANCIER cONSOLES",LF,"IN THE 63RD CENTURY,",LF
-            .asc "BUT THIS cONSOLE IS",LF,"JUST A POLE WITH A",LF
-            .asc "10-DIGIT KEYPAD TO",LF,"enter DESTINATIONS.",EOL
+            .asc "HAVE FANCIER CONSOLES",LF,"IN THE 63RD CENTURY,",LF
+            .asc "BUT THIS CONSOLE IS",LF,"JUST A STAND WITH A",LF
+            .asc "ROTARY CONTROL TO",LF,"dial DESTINATIONS.",EOL
 iBoss:      .asc "tHE boss",EOL,"tHE bOSS LOOKS LIKE A",LF
             .asc "MIDDLE-AGED WOMAN",LF,"IN A VIOLET LAB COAT,",LF
             .asc "BUT YOU KNOW SHE'S",LF
             .asc "BEEN DOING THIS FOR A",LF,"HUNDRED YEARS. sHE'S",LF
             .asc "WORKING MENTALLY AT",LF,"THE MOMENT, BUT YOU",LF
             .asc "KNOW YOU CAN ALWAYS",LF,"talk TO HER.",EOL
-iReel:      .asc "tEMPORAL reel",EOL,"tHE rEEL IS THE ONLY",LF
-            .asc "TOOL YOUR JOB really",LF,"REQUIRES. iT'S THE",LF
-            .asc "REMOTE COMPONENT OF",LF,"THE cURSOR. iT'S A",LF
-            .asc "HAND-SIZE DISK WITH",LF,"COLORFUL BLINKING",LF
-            .asc "LIGHTS. yOU OPERATE",LF,"IT WITH A SIMPLE",LF
-            .asc "squeeze.",EOL
+iReel:      .asc "tEMPORAL reel",EOL,"tHE REEL IS THE",LF
+            .asc "REMOTE COMPONENT OF",LF,"THE CURSOR. iT'S A",LF
+            .asc "HAND-SIZED WHEEL WITH",LF,"A SMALLER WHEEL",LF
+            .asc "STICKING OUT, SOFTLY",LF,"WHIRRING, WITH A",LF
+            .asc "PULSING AMBER LIGHT.",LF,LF
+            .asc "yOU OPERATE IT BY",LF,"windING IT.",EOL
 iQuota:     .asc "quota SHEET",EOL,"DUE TODAY:",LF,LF,"  1776",LF
-            .asc "  1055",LF,"  2022",LF,"  3266",LF,"  23",LF,LF
+            .asc "  1934",LF,"  2022",LF,"  3266",LF,"  23",LF,LF
             .asc "cHERNOV COLLECTS",LF,"YOUR iNTAKE AT 17:00.",LF,
             .asc "yOU JUST NEED TO drop",LF,"ASSETS IN THIS ROOM.",EOL
 iWatch:     .asc "pOCKET watch",EOL,"18th cENTURY. a GIFT",LF
             .asc "FROM dAD. oRNATE.",EOL
-iYear:      .asc "jUST A YEAR",EOL,"enter THE YEAR INTO",LF,"THE cONSOLE.",EOL
+iYear:      .asc "jUST A YEAR",EOL,"dial THE YEAR INTO",LF,"THE CONSOLE.",EOL
 iDesk:      .asc "jEFFERSON'S desk",EOL,"tHIS IS THE DESK THAT",LF
-            .asc "tHOMAS jEFFERSON WILL",LF,"USE TO WRITE THE",LF
+            .asc "tHOMAS jEFFERSON IS",LF,"USING TO WRITE THE",LF
             .asc "dECLARATION OF",LF,"iNDEPENDENCE. iF IT",LF
             .asc "GOES MISSING, HE'LL",LF,"WRITE IT ON SOMETHING",LF
             .asc "ELSE.",LF,LF,"iF IT SEEMS THERE'S A",LF
             .asc "PARADOX HERE, THAT'S",LF,"cHERNOV'S PROBLEM.",EOL
-iCell:      .asc "cell pHONE",EOL,"nOT IN THE LEAST",LF,"ANACHRONISIC, THIS IS"
-            .asc LF,"A 160MM BY 80MM SLAB",LF,"WITH AN oled SCREEN.",EOL
-iJefferson: .asc "tHOMAS jefferson",EOL,"yES, that ONE.",EOL
+iPhone:     .asc "cELL phone",EOL,"nOT IN THE LEAST",LF,"ANACHRONISIC, THIS IS"
+            .asc LF,"A 84Qc BY 42Qc SLAB",LF,"WITH AN oled SCREEN.",LF,LF
+            .asc "zERO BARS.",EOL
+iJefferson: .asc "tHOMAS jefferson",EOL,"yES, that jEFFERSON.",EOL
+iBall:      .asc "rUTH'S hOME rUN ball",EOL,"bABE rUTH HIT HIS",LF
+            .asc "700TH HOME RUN WITH",LF,"THIS BASEBALL.",EOL
+iTicket:    .asc "bASEBALL ticket",EOL,"jULY 14, 1934 tIGERS",LF
+            .asc "VS. yANKEES $1.40",EOL
+iSixpence:  .asc "sixpence pIECE",EOL,"aN OLD bRITISH COIN,",LF
+            .asc "WORTHLESS NOW.",EOL
+iGlove:     .asc "bASEBALL glove",EOL,"iT'S A TAD SMALL,",LF
+            .asc "SINCE YOU STOLE IT",LF,"FROM A CHILD, BUT IT",LF
+            .asc "SHOULD SUFFICE.",EOL
 
 ; Actions
 ;   ActVerb    - The Verb ID for this action
@@ -941,27 +996,42 @@ iJefferson: .asc "tHOMAS jefferson",EOL,"yES, that ONE.",EOL
 ;
 ;                If both ActFrom and ActTo are 0, then the text is displayed and 
 ;                the game ends.
+;
+;                If both ActFrom and ActTo are the same non-zero item id, only
+;                messages will be displayed.
 ;   ActResTxt  - The address of the success and failure messasges
 ;                (The success message is terminated by EOL, after which is the
 ;                 failure message, also terminated by EOL)
 ;
 ; Action IDs are zero-indexed, and the action id $ff (EV) is reserved for
 ; actions triggered by events (timer target, enters-room, score target)
-ActVerb:    .byte 6,7,EV,8,8,3, 3,  6, 9,  9, 9, EOL
-ActItem:    .byte 3,4,0, 7,9,8, 8, 12,10,  4, 0
-ActInvCon:  .byte 0,4,0, 0,0,0, 0,  0,10,  4, 0
-ActRoomCon: .byte 3,0,0, 1,1,11,12, 0,12, 12,12
-ActInvExcl: .byte 0,1,0, 0,0,8, 8,  8, 8,  8, 8
-ActFrom:    .byte 1,0,0, 0,0,11,1,  1, 10, 4, 1
-ActTo:      .byte 1,1,0, 4,0,12,1,  1, 8,  8, 1
+ActVerb:    .byte 6,7,EV,8,8,3, 3,  6, 9,  9, 9,EV, 8,10,EV,11,11,11
+            .byte EV,EOL
+ActItem:    .byte 3,4,0, 7,9,8, 8, 12,10,  4, 0,0 ,16,14, 0,13,13,13
+            .byte 0
+ActInvCon:  .byte 0,4,0, 0,0,0, 0,  0,10,  4, 0,0 , 0,15, 0,0, 17,0
+            .byte 13
+ActRoomCon: .byte 3,0,0, 1,1,11,12, 0,12, 12,12,0 , 1, 0,18,20,19,19
+            .byte 0
+ActInvExcl: .byte 0,1,0, 0,0,8, 8,  8, 8,  8, 8,14, 0, 0, 0,0, 0, 0
+            .byte 0
+ActFrom:    .byte 1,0,0, 0,0,11,1,  1, 10, 4, 1,0 , 0,15,18,1, 17,19
+            .byte 0
+ActTo:      .byte 1,1,0, 4,0,12,1,  1, 8,  8, 1,9 , 9,14,19,1, 13,20
+            .byte 15
 ActResTxtL: .byte <aBoss,<aHome,<aDie,<aX,<a1841,<aJeffEnter,<aJeffSay
-            .byte <aJeffOffer,<aJeffAcc,<aJeffAcc,<aJeffDecl      
+            .byte <aJeffOffer,<aJeffAcc,<aJeffAcc,<aJeffDecl
+            .byte <aNeedTix,<aX,<aBuyTix,<aBallHit,<aNoCatch,<aCatch,0
+            .byte <aToJail
 ActResTxtH: .byte >aBoss,>aHome,>aDie,>aX,>a1841,>aJeffEnter,>aJeffSay
             .byte >aJeffOffer,>aJeffAcc,>aJeffAcc,>aJeffDecl
+            .byte >aNeedTix,>aX,>aBuyTix,>aBallHit,>aNoCatch,>aCatch,0
+            .byte >aToJail
+            
 ; Action Results
 aBoss:      .asc "'hAVE A GREAT DAY,",LF,"AND DON'T FORGET YOUR",LF
             .asc "REEL!'",EOL,"sHE'S NOT HERE.",EOL
-aHome:      .asc "wITH A QUIET RUSH OF",LF,"AIR, YOU'RE BACK TO",LF
+aHome:      .asc CLRHOME,"wITH A QUIET RUSH OF",LF,"AIR, YOU'RE BACK TO",LF
             .asc "YOUR iNTAKE rOOM",EOL,"yOU DON'T HAVE A",LF
             .asc "TEMPORAL REEL.",EOL
 aDie:       .asc "tHE bOSS RUSHES TO",LF,"TACKLE YOU BUT IT'S",LF
@@ -969,18 +1039,20 @@ aDie:       .asc "tHE bOSS RUSHES TO",LF,"TACKLE YOU BUT IT'S",LF
             .asc "CITYSCAPE FOR ONLY A",LF,"MOMENT BEFORE THE",LF
             .asc "bUBBLE COLLAPSES",LF,"AROUND YOU AND YOU",LF
             .asc "STOP EXISTING.",EOL,EOL
-aX:         .asc "yOU ENTER THE YEAR ON",LF,"THE cONSOLE'S KEYPAD.",LF,LF
-            .asc "a PLEASANT BREEZE,",LF,"ALMOST SILENT, JUST",LF
-            .asc "FOR A SECOND. yOUR",LF,"SURROUNDINGS HAVE",LF
-            .asc "CHANGED.",EOL,"nOTHING HAPPENS.",EOL
-a1841:      .asc "a LITTLE PUFF, YOU'RE",LF,"BACK HOME. yOU SMELL",LF
+aX:         .asc CLRHOME,"yOU DIAL THE YEAR ON",LF,"THE CONSOLE.",LF,LF
+            .asc "tHE CURSOR'S WHEELS",LF,"SPIN FASTER. yOU FEEL",LF
+            .asc "A HOT LOUD RUSH OF",LF,"AIR LIKE A LOCOMOTIVE",LF
+            .asc "IS GOING THROUGH YOUR",LF,"CHEST.",LF,LF
+            .asc "yOUR SURROUNDINGS",LF,"HAVE CHANGED...",EOL
+            .asc "tHERE'S NO CONSOLE.",EOL
+a1841:      .asc "tHE CURSOR ROARS YOU",LF,"BACK HOME. yOU SMELL",LF
             .asc "THE FAMILIAR SMELLS",LF,"OF YOUR COMFORTING",LF
             .asc "HEARTH AND RELAX...",LF,LF
-            .asc "...bUT THEN YOU",LF,"NOTICE THE cURSOR IN",LF
-            .asc "YOUR DEN. tHE bOSS",LF
-            .asc "WON'T BE HAPPY",LF,"ABOUT YOU LEAVING",LF
-            .asc "EARLY. tOMORROW'S",LF,"GOING TO BE A DAMN",LF
-            .asc "BUSY DAY.",EOL,EOL
+            .asc "...bUT THEN YOU",LF,"THINK OF THE CURSOR",LF
+            .asc "IN YOUR DEN. tHE bOSS",LF
+            .asc "WON'T BE HAPPY",LF,"ABOUT YOUR LEAVING",LF
+            .asc "EARLY.",LF,LF,"tOMORROW'S GOING TO",LF
+            .asc "BE A DAMN BUSY DAY.",EOL,"tHERE'S NO CONSOLE.",EOL
 aJeffEnter: .asc "jUST AS YOU TAKE THE",LF,"LITTLE DESK, A TALL",LF
             .asc "MAN EMERGES FROM",LF,"BEHIND AND WRESTS IT",LF
             .asc "FROM YOUR HANDS.",EOL,EOL
@@ -993,8 +1065,33 @@ aJeffOffer: .asc "'i INVENTED THIS DESK",LF,"AND i'M NOT GOING TO",LF
             .asc "FROM THE FUTURE, i'LL",LF,"swap IT FOR MY",LF
             .asc "EXCELLENT DESK!'",EOL,"'i BID YOU GOOD DAY.'",EOL
 aJeffDecl:  .asc "'i HAVE ABSOLUTELY NO",LF,"INTEREST IN THAT.'",EOL
-            .asc "nOBODY TO SWAP WITH",EOL
+            .asc "nOBODY TO SWAP WITH!",EOL
 aJeffAcc:   .asc "'tHE LIGHT! tHE",LF,"SOUND! wE HAVE A",LF
             .asc "DEAL! tHERE'S A NICE",LF,"TABLE i CAN HAVE",LF
             .asc "BROUGHT UP FOR",LF,"WRITING THIS THING.'",LF,LF
-            .asc "jEFFERSON SHAKES",LF,"YOUR HAND.",EOL,"nOTHING HAPPENS",EOL
+            .asc "jEFFERSON HANDS",LF,"YOU HIS DESK.",EOL,EOL
+aNeedTix:   .asc "fRECKLE-FACED KID AT",LF,"THE COUNTER STOPS",LF
+            .asc "YOU. 'yOU NEED A",LF,"TICKET TO GET IN!'",EOL
+            .asc "'yOU BETTER GET IN,",LF,"bABE'S ON DECK!'",EOL
+aBuyTix:    .asc "'tHAT'S SOME FUNNY",LF,"LOOKIN' MONEY, BUT i",LF
+            .asc "GUESS IT SPENDS THE",LF,"SAME. hERE'S YOUR",LF
+            .asc "TICKET.'",EOL,"tHE KID SAYS YOU",LF
+            .asc "NEED 'mONEY...?'",EOL
+aBallHit:   .asc "yOU HEAR THE CRACK",LF,"OFF rUTH'S BAT AND",LF
+            .asc "SEE THE BALL HEADING",LF,"RIGHT AT YOU. yOU",LF
+            .asc "KNEW EXACTLY WHERE TO",LF,"BE...",EOL
+            .asc "tHE GAME GOES ON.",EOL
+aNoCatch:   .asc "yOU HAD YOUR CHANCE.",LF,"yOU MISSED IT. lET IT",LF,
+            .asc "GO.",EOL,EOL
+aCatch:     .asc "wITH A SATISFYING",LF,"THUD, THE BALL PLANTS",LF
+            .asc "ITSELF IN THE",LF,"PILFERED GLOVE. fANS",LF
+            .asc "EYE YOU SUSPICIOUSLY.",LF,LF,"yOU... BETTER GET OUT",LF
+            .asc "OF HERE.",EOL
+            .asc "wITH NOTHING TO CATCH",LF,"THE BALL, IT BOUNCES",LF
+            .asc "OUT OF YOUR HANDS AND",LF,"INTO THE HANDS OF",LF
+            .asc "ANOTHER FAN, WHO RUNS",LF,"LAUGHING FROM nAVIN",LF
+            .asc "fIELD.",EOL
+aToJail:    .asc "a LITTLE KID CRIES",LF,"AND POINTS AT YOU,",LF
+            .asc "'sTOLE MY GLOVE!'",LF,LF,"CROWD DISAPPROVES,",LF
+            .asc "AND SO DO dETROIT'S'",LF,"fINEST...",EOL,EOL
+            
