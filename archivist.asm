@@ -50,9 +50,9 @@ ST_ITEM_L   = 6                 ; Starting item ID, left hand
 ST_ITEM_R   = 0                 ; Starting item ID, right hand 
 
 ; Timer Configuration
-TIMER_START = 1                 ; Timer starting value
-TIMER_DIR   = $01               ; Timer direction ($01 = +1, $ff = -1)
-TIMER_TGT   = 255               ; Timer target (at which TIMEOUT_ACT happens)
+TIMER_START = 4                 ; Timer starting value
+TIMER_DIR   = $04               ; Timer direction ($01 = +1, $ff = -1)
+TIMER_TGT   = 248               ; Timer target (at which TIMEOUT_ACT happens)
 TIMEOUT_ACT = 0                 ; Timeout action ID
 TRIGGER     = 0                 ; Timer value when triggered
 TIME_OFFSET = 9                 ; Display time offset (e.g., for clocks)
@@ -783,14 +783,14 @@ ConfirmTx:  .asc COL_ALERT,"ok",EOL
 ; Verbs
 ;   VerbID - Cross-referenced ID list for verb synonyms
 ; Basic - GO (MovE), LooK (L), GeT (TakE), DroP, InventorY (I)
-; Game - TALK,SQUEEZE,SET
+; Game - TALK(6), SQUEEZE(7), ENTER(8), SET(2), SWAP(9)
 ; Verb IDs are 1-indexed
-Verb1:      .byte "G","M","L","L","G","T","D","I","I"     ; Basic Verbs
-            .byte "T","S","E","R",EOL
-VerbL:      .byte "O","E","K","L","T","E","P","Y","I"     ; Basic Verbs
-            .byte "K","E","R","D"
+Verb1:      .byte 'G','M','L','L','G','T','D','I','I'     ; Basic Verbs
+            .byte 'T','S','E','R','S',EOL
+VerbL:      .byte 'O','E','K','L','T','E','P','Y','I'     ; Basic Verbs
+            .byte 'K','E','R','D','P'
 VerbID:     .byte 1,1,2,2,3,3,4,5,5                       ; Basic Verbs
-            .byte 6,7,8,2
+            .byte 6,7,8,2,9
 
 ; Rooms
 ;                 D, U, E, W, S, N, DescL, DescH, ActID
@@ -802,7 +802,10 @@ Rooms:      ; Main Facility
             
             ; Graff House, 1776
             .byte 0, 0, 5, 0, 0, 0,<rCorner,>rCorner,0
-            .byte 0, 6, 0, 4, 7, 0,<rAnteroom,>rAnteroom,0 
+            .byte 0, 7, 0, 0, 0, 0,<rFoyer,>rFoyer,0 
+            .byte 5, 0, 0, 0, 0, 7,<rJeffRoom,>rJeffRoom,0 
+            .byte 5, 0, 0, 0, 6, 8,<rLanding,>rLanding,0
+            .byte 0, 0, 0, 0, 7, 0,<rJeffBed,>rJeffBed,0
 
 ; Room Descriptions
 ;     The room name is terminated by EOL, after which is the room description,
@@ -825,8 +828,21 @@ rCorner:    .asc "cORNER",EOL,"tHE CORNER OF 7TH AND",LF,"mARKET sTREET IN",LF
             .asc "INTRICATE fLEMISH",LF,"bOND BRICK PATTERN",LF
             .asc "DOMINATES THE CORNER.",LF,LF,"tHERE'S AN ENTRYWAY",LF
             .asc "ON THE WEST SIDE.",EOL
-rAnteroom:  .asc "aNTEROOM",EOL,"tHE ANTEROOM OF gRAFF",LF,"hOUSE IS CLEARLY",LF
-            .asc "EXPENSIVE, THE HOME",LF,"OF A RICH",LF,"rEVOLUTIONARY.",EOL          
+rFoyer:     .asc "fOYER",EOL,"tHE WHOLE OF gRAFF",LF,"hOUSE IS CLEARLY",LF
+            .asc "NEW CONSTRUCTION,",LF,"LOVINGLY DESIGNED AND",LF
+            .asc "BUILT BY ITS OCCUPANT",LF,"AND LANDLORD.",LF,LF
+            .asc "tHERE'S A STAIRWAY",LF,"UP, BUT THE REST OF",LF
+            .asc "THE HOUSE IS LOCKED",LF
+            .asc "OFF.",EOL            
+rLanding:   .asc "lANDING",EOL,"tHERE ARE ROOMS TO",LF,"THE NORTH AND SOUTH.",EOL
+rJeffRoom:  .asc "pARLOR",EOL,"sOMEBODY IS DOING A",LF,"LOT OF WRITING HERE.",LF
+            .asc "pAPERS ARE STREWN",LF,"AROUND, ANYTHING",LF
+            .asc "LINEN IS STAINED BY",LF,"INK. a WASTEBASKET",LF
+            .asc "BRIMS WITH REJECTED",LF,"DRAFTS READING 'iN",LF
+            .asc "cONGRESS.'",EOL   
+rJeffBed:   .asc "bED CHAMBER",EOL,"tHE BED IS NEATLY",LF
+            .asc "MADE. wHOEVER RENTS",LF,"THIS ROOM DOESN'T",LF
+            .asc "SLEEP MUCH.",EOL
             
 ; Items
 ;   Item1    - First Character
@@ -846,14 +862,14 @@ rAnteroom:  .asc "aNTEROOM",EOL,"tHE ANTEROOM OF gRAFF",LF,"hOUSE IS CLEARLY",LF
 ;    also terminated by EOL)
 ; 
 ; Item IDs are 1-indexed
-Item1:      .byte 'C','C','B','R','Q','W','1','D','1',EOL
-ItemL:      .byte 'R','E','S','L','A','H','6','K','1'
-ItemRoom:   .byte  1 , 1,  2 , 2 , 1 , 0,  1 , 5 , 1
-ItemProp:   .byte  3 , 3,  3 , 0 , 0 , 8,  3 ,$40, 3
+Item1:      .byte 'C','C','B','R','Q','W','1','D','1','C','J','J',EOL
+ItemL:      .byte 'R','E','S','L','A','H','6','K','1','L','N','N'
+ItemRoom:   .byte  1 , 1,  2 , 2 , 1 , 0,  1 , 6 , 1 , 1 , 6 , 0
+ItemProp:   .byte  3 , 3,  3 , 0 , 0 , 8,  3 ,$40, 3 , 0 , 7 , 2
 ItemTxtL:   .byte <iCursor,<iConsole,<iBoss,<iReel,<iQuota,<iWatch,<iYear
-            .byte <iDesk,<iYear
+            .byte <iDesk,<iYear,<iCell,0,<iJefferson
 ItemTxtH:   .byte >iCursor,>iConsole,>iBoss,>iReel,>iQuota,>iWatch,>iYear
-            .byte >iDesk,>iYear
+            .byte >iDesk,>iYear,>iCell,0,>iJefferson
 
 ; Item Descriptions
 iCursor:    .asc "cURSOR",EOL,"iT'S A BIG GREY TUBE",LF,"WITH A BUNCH OF",LF
@@ -879,8 +895,8 @@ iReel:      .asc "tEMPORAL reel",EOL,"tHE rEEL IS THE ONLY",LF
             .asc "HAND-SIZE DISK WITH",LF,"COLORFUL BLINKING",LF
             .asc "LIGHTS. yOU OPERATE",LF,"IT WITH A SIMPLE",LF
             .asc "squeeze.",EOL
-iQuota:     .asc "quota SHEET",EOL,"DUE TODAY:",LF,LF,"  1776",LF,"  1055",LF,"  2022",LF
-            .asc "  3266",LF,"  23",LF,LF
+iQuota:     .asc "quota SHEET",EOL,"DUE TODAY:",LF,LF,"  1776",LF
+            .asc "  1055",LF,"  2022",LF,"  3266",LF,"  23",LF,LF
             .asc "cHERNOV COLLECTS",LF,"YOUR iNTAKE AT 17:00.",LF,
             .asc "yOU JUST NEED TO drop",LF,"ASSETS IN THIS ROOM.",EOL
 iWatch:     .asc "pOCKET watch",EOL,"18th cENTURY. a GIFT",LF
@@ -892,6 +908,9 @@ iDesk:      .asc "jEFFERSON'S desk",EOL,"tHIS IS THE DESK THAT",LF
             .asc "GOES MISSING, HE'LL",LF,"WRITE IT ON SOMETHING",LF
             .asc "ELSE.",LF,LF,"iF IT SEEMS THERE'S A",LF
             .asc "PARADOX HERE, THAT'S",LF,"cHERNOV'S PROBLEM.",EOL
+iCell:      .asc "cell pHONE",EOL,"nOT IN THE LEAST",LF,"ANACHRONISIC, THIS IS"
+            .asc LF,"A 160MM BY 80MM SLAB",LF,"WITH AN oled SCREEN.",EOL
+iJefferson: .asc "tHOMAS jefferson",EOL,"yES, that ONE.",EOL
 
 ; Actions
 ;   ActVerb    - The Verb ID for this action
@@ -928,16 +947,17 @@ iDesk:      .asc "jEFFERSON'S desk",EOL,"tHIS IS THE DESK THAT",LF
 ;
 ; Action IDs are zero-indexed, and the action id $ff (EV) is reserved for
 ; actions triggered by events (timer target, enters-room, score target)
-ActVerb:    .byte 6,7,EV,8,8,EOL
-ActItem:    .byte 3,4,0, 7,9
-ActInvCon:  .byte 0,4,0, 0,0
-ActRoomCon: .byte 3,0,0, 1,1
-ActInvExcl: .byte 0,1,0, 0,0
-ActFrom:    .byte 1,0,0, 0,0
-ActTo:      .byte 1,1,0, 4,0
-ActResTxtL: .byte <aBoss,<aHome,<aDie,<aX,<a1841
-ActResTxtH: .byte >aBoss,>aHome,>aDie,>aX,>a1841
-
+ActVerb:    .byte 6,7,EV,8,8,3, 3,  6, 9,  9, 9, EOL
+ActItem:    .byte 3,4,0, 7,9,8, 8, 12,10,  4, 0
+ActInvCon:  .byte 0,4,0, 0,0,0, 0,  0,10,  4, 0
+ActRoomCon: .byte 3,0,0, 1,1,11,12, 0,12, 12,12
+ActInvExcl: .byte 0,1,0, 0,0,8, 8,  8, 8,  8, 8
+ActFrom:    .byte 1,0,0, 0,0,11,1,  1, 10, 4, 1
+ActTo:      .byte 1,1,0, 4,0,12,1,  1, 8,  8, 1
+ActResTxtL: .byte <aBoss,<aHome,<aDie,<aX,<a1841,<aJeffEnter,<aJeffSay
+            .byte <aJeffOffer,<aJeffAcc,<aJeffAcc,<aJeffDecl      
+ActResTxtH: .byte >aBoss,>aHome,>aDie,>aX,>a1841,>aJeffEnter,>aJeffSay
+            .byte >aJeffOffer,>aJeffAcc,>aJeffAcc,>aJeffDecl
 ; Action Results
 aBoss:      .asc "'hAVE A GREAT DAY,",LF,"AND DON'T FORGET YOUR",LF
             .asc "REEL!'",EOL,"sHE'S NOT HERE.",EOL
@@ -961,3 +981,20 @@ a1841:      .asc "a LITTLE PUFF, YOU'RE",LF,"BACK HOME. yOU SMELL",LF
             .asc "WON'T BE HAPPY",LF,"ABOUT YOU LEAVING",LF
             .asc "EARLY. tOMORROW'S",LF,"GOING TO BE A DAMN",LF
             .asc "BUSY DAY.",EOL,EOL
+aJeffEnter: .asc "jUST AS YOU TAKE THE",LF,"LITTLE DESK, A TALL",LF
+            .asc "MAN EMERGES FROM",LF,"BEHIND AND WRESTS IT",LF
+            .asc "FROM YOUR HANDS.",EOL,EOL
+aJeffSay:   .asc "'i DON'T THINK THIS",LF,"BELONGS TO YOU,'",LF
+            .asc "jEFFERSON FROWNS.",EOL,EOL
+aJeffOffer: .asc "'i INVENTED THIS DESK",LF,"AND i'M NOT GOING TO",LF
+            .asc "LET YOU TAKE IT.",LF,LF,"'bUT... yOU LOOK LIKE",LF
+            .asc "SOMEONE WITH ACCESS",LF,"TO GREAT FUTURISTIC",LF
+            .asc "INVENTIONS. iF YOU",LF,"BRING ME SOMETHING",LF
+            .asc "FROM THE FUTURE, i'LL",LF,"swap IT FOR MY",LF
+            .asc "EXCELLENT DESK!'",EOL,"'i BID YOU GOOD DAY.'",EOL
+aJeffDecl:  .asc "'i HAVE ABSOLUTELY NO",LF,"INTEREST IN THAT.'",EOL
+            .asc "nOBODY TO SWAP WITH",EOL
+aJeffAcc:   .asc "'tHE LIGHT! tHE",LF,"SOUND! wE HAVE A",LF
+            .asc "DEAL! tHERE'S A NICE",LF,"TABLE i CAN HAVE",LF
+            .asc "BROUGHT UP FOR",LF,"WRITING THIS THING.'",LF,LF
+            .asc "jEFFERSON SHAKES",LF,"YOUR HAND.",EOL,"nOTHING HAPPENS",EOL
