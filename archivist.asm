@@ -175,6 +175,7 @@ ShowErr:    lda #<NoVerbTx      ; Show the error
 Main:       lda #COL_INPUT      ; Set the color
             jsr CHROUT          ; ,,
             ldx #0              ; X is buffer index
+            sta BUFFER          ; Clear the buffer
 -loop:      jsr CHRIN           ; KERNAL CHRIN
             cmp #LF             ; Did user press RETURN?
             beq enter           ;   If so, go to end of input
@@ -273,6 +274,8 @@ is_from:    sta FROM_ID         ; Store the From ID temporarily
             sta TIMER           ;   ,,
 not_trig:   jmp next_act        ; Contine processing
 xform:      sta TO_ID           ; Transform - Put To where From is
+            cmp FROM_ID
+            beq next_act2
             ldy FROM_ID         ;   Get the From item's current location
             lda ITEM_ROOMS-1,y  ;   ,,
             ldy TO_ID           ;   And store it into the To index
@@ -819,6 +822,16 @@ Rooms:      ; Main Facility
             .byte 0, 0,12, 0,10, 0,<rLeftF,>rLeftF,0
             .byte 0, 0, 0, 0, 9,10,<rCorridor,>rCorridor,11
             .byte 0, 0,15,15, 0, 0,<rJail,>rJail,0
+            
+            ; Nefertari's Tomb, 1256BC
+            ;     D, U, E, W, S, N, DescL, DescH, ActID
+            .byte 0, 0,17, 0, 0, 18,<rAnteCh,>rAnteCh,0
+            .byte 0, 0, 0,17, 0, 0 ,<rSideCh,>rSideCh,0
+            .byte 19,0, 0, 0, 16,0 ,<rRamp,>rRamp,0
+            .byte 0,18,21,20, 0, 22,<rSarcRm,>rSarcRm,0
+            .byte 0,0, 19, 0, 0, 0 ,<rWAnnex,>rWAnnex,0
+            .byte 0,0,  0,19, 0, 0 ,<rEAnnex,>rEAnnex,0
+            .byte 0,0,  0, 0,19, 0 ,<rResOs,>rResOs,0
 
 ; Room Descriptions
 ;     The room name is terminated by EOL, after which is the room description,
@@ -826,7 +839,7 @@ Rooms:      ; Main Facility
 rIntake:    .asc "iNTAKE rOOM",EOL,"tHIS CIRCULAR ROOM IS",LF
             .asc "YOUR WORK AREA. tHE",LF,"CURSOR DOMINATES THE",LF
             .asc "EXACT CENTER OF THE",LF,"SPACE. tHE CONSOLE IS",LF
-            .asc "ABOUT A LEROC AWAY.",LF,LF,"a LADDER TUBE LEADS",LF
+            .asc "ABOUT A METER AWAY.",LF,LF,"a LADDER TUBE LEADS",LF
             .asc "DOWN TO aDMIN.",EOL
 rOffice:    .asc "bOSS'S oFFICE",EOL,"tHE bOSS ISN'T ALWAYS",LF
             .asc "IN, BUT SHE IS TODAY,",LF,"AND SHE GIVES YOU A",LF
@@ -838,7 +851,7 @@ rPlaza:     .asc "pLAZA",EOL,"WHAT?",EOL
 
             ; Graff House, 1776
 rCorner:    .asc "cORNER",EOL,"tHE CORNER OF 7TH AND",LF,"mARKET sTREET IN",LF
-            .asc "pHILADELPHIA, usa. a",LF,"NEW HOUSE WITH AN",LF
+            .asc "pHILADELPHIA.",LF,LF,"a NEW HOUSE WITH AN",LF
             .asc "INTRICATE fLEMISH",LF,"bOND BRICK PATTERN",LF
             .asc "ADORNS THE CORNER.",LF,LF,"tHERE'S AN ENTRYWAY",LF
             .asc "ON THE WEST FRONT.",EOL
@@ -867,8 +880,8 @@ rHomeSt:    .asc "hOME pLATE sTANDS",EOL,"tHE GREEN OF THE",LF
             .asc "DIAMOND IS SOMETHING",LF,"YOU'LL NEVER FORGET,",LF
             .asc "AS ARE THE SOUNDS OF",LF,"THE BAT AND THE SMELL",LF
             .asc "OF THE ALMONDS.",LF,LF,"bUT YOU DON'T WANT TO",LF
-            .asc "BE BEHIND THE PLATE.",LF,"yOU KNOW WHERE TO GET",LF
-            .asc "WHAT YOU CAME FOR.",EOL
+            .asc "BE BEHIND THE PLATE.",LF,LF,"lEFT fIELD IS TO THE",LF
+            .asc "EAST, AND rIGHT fIELD",LF,"TO THE WEST.",EOL
 rRightF:    .asc "rIGHT fIELD sTANDS",EOL,"tHE CROWD ROARS.",EOL
 rCenterF:   .asc "cENTER fIELD sTANDS",EOL,"tHE CROWD OUT HERE IS",LF
             .asc "RAUCOUS, EVEN FOR",LF,"dETROIT. yOU'RE",LF
@@ -880,9 +893,17 @@ rLeftF:     .asc "lEFT fIELD sTANDS",EOL,"eVERYBODY IS",LF
             .asc "THEY'LL SOON BE SAD",LF,"ABOUT BEING ON THE",LF
             .asc "WRONG SIDE OF THE",LF,"PARK.",EOL
 rCorridor:  .asc "cORRIDOR",EOL,"sTANDS ARE TO THE",LF,"NORTH.",EOL
-rJail:      .asc "dETROIT jAIL",EOL,"tHE CELL IS LIKE 1x1",LF
-            .asc "LEROC. iT'S SUPER",LF,"EMBARASSING.",LF,LF
+rJail:      .asc "dETROIT jAIL",EOL,"tHE CELL IS LIKE 2x2",LF
+            .asc "METERS. iT'S SUPER",LF,"EMBARASSING.",LF,LF
             .asc "hOPEFULLY YOU HAVE",LF,"YOUR REEL.",EOL
+rAnteCh:
+rSideCh:  
+rRamp:
+rSarcRm:
+rWAnnex:
+rEAnnex:
+rResOs:
+
             
 ; Items
 ;   Item1    - First Character
@@ -903,19 +924,20 @@ rJail:      .asc "dETROIT jAIL",EOL,"tHE CELL IS LIKE 1x1",LF
 ; 
 ; Item IDs are 1-indexed
 Item1:      .byte 'C','C','B','R','Q','W','1','D','1','P','*','J','B'
-            .byte 'T','S','1','G','*','*','*',EOL
+            .byte 'T','S','1','G','*','*','*','1',EOL
 ItemL:      .byte 'R','E','S','L','A','H','6','K','1','E','*','N','L'
-            .byte 'T','E','4','E','*','*','*'
+            .byte 'T','E','4','E','*','*','*','C'
 ItemRoom:   .byte  1 , 1,  2 , 2 , 1 , 0,  1 , 6 , 1 , 1 , 6 , 0 , 0
-            .byte  1 , 8,  1 ,13 ,11 , 0,  0
+            .byte  0 , 8,  1 ,13 ,11 , 0,  0 , 1
 ItemProp:   .byte  3 , 3,  3 , 0 , 0 , 8,  3 ,$40, 3 , 0 , 7 , 2 ,$40
-            .byte  0 , 0,  3 , 1 , 7 , 7,  7
+            .byte  0 , 0,  3 , 1 , 7 , 7,  7 , 3
 ItemTxtL:   .byte <iCursor,<iConsole,<iBoss,<iReel,<iQuota,<iWatch,<iYear
             .byte <iDesk,<iYear,<iPhone,0,<iJefferson,<iBall,<iTicket
-            .byte <iSixpence,<iYear,<iGlove,0,0,0
+            .byte <iSixpence,<iYear,<iGlove,0,0,0,<iYear
 ItemTxtH:   .byte >iCursor,>iConsole,>iBoss,>iReel,>iQuota,>iWatch,>iYear
             .byte >iDesk,>iYear,>iPhone,0,>iJefferson,>iBall,>iTicket
-            .byte >iSixpence,>iYear,>iGlove,0,0,0
+            .byte >iSixpence,>iYear,>iGlove,0,0,0,>iYear
+
 ; Item Descriptions
 iCursor:    .asc "cURSOR",EOL,"tHE CURSOR LOOKS LIKE",LF
             .asc "A STEAM ENGINE",LF,"STUFFED IN A TUXEDO.",LF
@@ -941,7 +963,7 @@ iReel:      .asc "tEMPORAL reel",EOL,"tHE REEL IS THE",LF
             .asc "PULSING AMBER LIGHT.",LF,LF
             .asc "yOU OPERATE IT BY",LF,"windING IT.",EOL
 iQuota:     .asc "quota SHEET",EOL,"DUE TODAY:",LF,LF,"  1776",LF
-            .asc "  1934",LF,"  2022",LF,"  3266",LF,"  23",LF,LF
+            .asc "  * 1934",LF," * 2022",LF," * 1330BC",LF,"  23",LF,LF
             .asc "cHERNOV COLLECTS",LF,"YOUR iNTAKE AT 17:00.",LF,
             .asc "yOU JUST NEED TO drop",LF,"ASSETS IN THIS ROOM.",EOL
 iWatch:     .asc "pOCKET watch",EOL,"18th cENTURY. a GIFT",LF
@@ -953,8 +975,8 @@ iDesk:      .asc "jEFFERSON'S desk",EOL,"tHIS IS THE DESK THAT",LF
             .asc "GOES MISSING, HE'LL",LF,"WRITE IT ON SOMETHING",LF
             .asc "ELSE.",LF,LF,"iF IT SEEMS THERE'S A",LF
             .asc "PARADOX HERE, THAT'S",LF,"cHERNOV'S PROBLEM.",EOL
-iPhone:     .asc "cELL phone",EOL,"nOT IN THE LEAST",LF,"ANACHRONISIC, THIS IS"
-            .asc LF,"A 84Qc BY 42Qc SLAB",LF,"WITH AN oled SCREEN.",LF,LF
+iPhone:     .asc "cELL phone",EOL,"nOT IN THE LEAST",LF,"ANACHRONISTIC, IT'S"
+            .asc LF,"AN 150MM BY 75MM SLAB",LF,"WITH AN oled SCREEN.",LF,LF
             .asc "zERO BARS.",EOL
 iJefferson: .asc "tHOMAS jefferson",EOL,"yES, that jEFFERSON.",EOL
 iBall:      .asc "rUTH'S hOME rUN ball",EOL,"bABE rUTH HIT HIS",LF
@@ -964,8 +986,7 @@ iTicket:    .asc "bASEBALL ticket",EOL,"jULY 14, 1934 tIGERS",LF
 iSixpence:  .asc "sixpence pIECE",EOL,"aN OLD bRITISH COIN,",LF
             .asc "WORTHLESS NOW.",EOL
 iGlove:     .asc "bASEBALL glove",EOL,"iT'S A TAD SMALL,",LF
-            .asc "SINCE YOU STOLE IT",LF,"FROM A CHILD, BUT IT",LF
-            .asc "SHOULD SUFFICE.",EOL
+            .asc "AS A CHILD'S GLOVE,",LF,"BUT IT SHOULD WORK.",EOL
 
 ; Actions
 ;   ActVerb    - The Verb ID for this action
@@ -1031,9 +1052,13 @@ ActResTxtH: .byte >aBoss,>aHome,>aDie,>aX,>a1841,>aJeffEnter,>aJeffSay
 ; Action Results
 aBoss:      .asc "'hAVE A GREAT DAY,",LF,"AND DON'T FORGET YOUR",LF
             .asc "REEL!'",EOL,"sHE'S NOT HERE.",EOL
-aHome:      .asc CLRHOME,"wITH A QUIET RUSH OF",LF,"AIR, YOU'RE BACK TO",LF
-            .asc "YOUR iNTAKE rOOM",EOL,"yOU DON'T HAVE A",LF
-            .asc "TEMPORAL REEL.",EOL
+aHome:      .asc CLRHOME,"bEING REELED BACK IS",LF,"ALWAYS DISCONCERTING.",LF
+            .asc "iT'S LIKE RIDING A",LF,"ROLLER COASTER WHILE",LF
+            .asc "WEARING A vr HEADSET",LF,"OF A DIFFERENT ROLLER",LF
+            .asc "COASTER.",LF,LF,"tHE SENSATION LASTS",LF
+            .asc "ONLY A MOMENT AND",LF,"YOU'RE BACK TO YOUR",LF
+            .asc "iNTAKE rOOM.",EOL
+            .asc "yOU DON'T HAVE A",LF,"TEMPORAL REEL.",EOL
 aDie:       .asc "tHE bOSS RUSHES TO",LF,"TACKLE YOU BUT IT'S",LF
             .asc "TOO LATE. yOU NOTICE",LF,"A MAGNIFICENT FUTURE",LF
             .asc "CITYSCAPE FOR ONLY A",LF,"MOMENT BEFORE THE",LF
@@ -1044,7 +1069,7 @@ aX:         .asc CLRHOME,"yOU DIAL THE YEAR ON",LF,"THE CONSOLE.",LF,LF
             .asc "A HOT LOUD RUSH OF",LF,"AIR LIKE A LOCOMOTIVE",LF
             .asc "IS GOING THROUGH YOUR",LF,"CHEST.",LF,LF
             .asc "yOUR SURROUNDINGS",LF,"HAVE CHANGED...",EOL
-            .asc "tHERE'S NO CONSOLE.",EOL
+            .asc "tHERE'S NO CURSOR.",EOL
 a1841:      .asc "tHE CURSOR ROARS YOU",LF,"BACK HOME. yOU SMELL",LF
             .asc "THE FAMILIAR SMELLS",LF,"OF YOUR COMFORTING",LF
             .asc "HEARTH AND RELAX...",LF,LF
@@ -1067,8 +1092,8 @@ aJeffOffer: .asc "'i INVENTED THIS DESK",LF,"AND i'M NOT GOING TO",LF
 aJeffDecl:  .asc "'i HAVE ABSOLUTELY NO",LF,"INTEREST IN THAT.'",EOL
             .asc "nOBODY TO SWAP WITH!",EOL
 aJeffAcc:   .asc "'tHE LIGHT! tHE",LF,"SOUND! wE HAVE A",LF
-            .asc "DEAL! tHERE'S A NICE",LF,"TABLE i CAN HAVE",LF
-            .asc "BROUGHT UP FOR",LF,"WRITING THIS THING.'",LF,LF
+            .asc "DEAL! i CAN HAVE A",LF,"NICE TABLE BROUGHT",LF
+            .asc "UPSTAIRS TO FINISH",LF,"THIS THING.'",LF,LF
             .asc "jEFFERSON HANDS",LF,"YOU HIS DESK.",EOL,EOL
 aNeedTix:   .asc "fRECKLE-FACED KID AT",LF,"THE COUNTER STOPS",LF
             .asc "YOU. 'yOU NEED A",LF,"TICKET TO GET IN!'",EOL
@@ -1092,6 +1117,6 @@ aCatch:     .asc "wITH A SATISFYING",LF,"THUD, THE BALL PLANTS",LF
             .asc "ANOTHER FAN, WHO RUNS",LF,"LAUGHING FROM nAVIN",LF
             .asc "fIELD.",EOL
 aToJail:    .asc "a LITTLE KID CRIES",LF,"AND POINTS AT YOU,",LF
-            .asc "'sTOLE MY GLOVE!'",LF,LF,"CROWD DISAPPROVES,",LF
+            .asc "'sTOLE MY GLOVE!'",LF,LF,"cROWD DISAPPROVES,",LF
             .asc "AND SO DO dETROIT'S'",LF,"fINEST...",EOL,EOL
             
