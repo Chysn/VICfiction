@@ -15,15 +15,7 @@
 ;
 ; https://creativecommons.org/licenses/by-nc/4.0/legalcode.txt
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; BASIC LAUNCHER
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; This is the tokenization of the following BASIC program, which
-; runs this game
-;     42 SYS4621
-* = $1201
-Launcher:   .byte $0b,$10,$2a,$00,$9e,$34,$36,$32
-            .byte $31,$00,$00,$00
+* = $4000
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; GAME-SPECIFIC CONFIGURATION SETTINGS
@@ -46,8 +38,8 @@ SCORE_ACT   = 2                 ; Action id when score is achieved
 
 ; Inventory Configuration
 ; Make sure any inventory configured here has an ItemRoom value of 0
-ST_ITEM_L   = 6                 ; Starting item ID, left hand
-ST_ITEM_R   = 0                 ; Starting item ID, right hand 
+ST_ITEM_L   = 6                 ; Starting Item ID, left hand
+ST_ITEM_R   = 0                 ; Starting Item ID, right hand 
 
 ; Timer Configuration
 TIMER_START = 4                 ; Timer starting value
@@ -72,8 +64,8 @@ TIMER       = $ae               ; Game timer
 RM          = $af               ; Room address (2 bytes)
 SCORE       = $b1               ; Score (number of scored items in SCORE_RM)
 BUFFER      = $0220             ; Input buffer
-SEEN_ROOMS  = $0340             ; Marked as 1 when entered
-ITEM_ROOMS  = $0360             ; RAM storage for item rooms
+SEEN_ROOMS  = $1c00             ; Marked as 1 when entered
+ITEM_ROOMS  = $1d00             ; RAM storage for item rooms
 
 ; Operating System Memory Locations
 CASECT      = $0291             ; Disable Commodore case
@@ -100,6 +92,7 @@ RVS_ON      = $12               ; Reverse on
 RVS_OFF     = $92               ; Reverse off
 BACKSP      = $9d               ; Backspace
 CLRHOME     = $93               ; CLEAR/HOME
+CRSRUP      = $91               ; Cursor Up
 GO_CMD      = 1                 ; Basic Command - GO
 LOOK_CMD    = 2                 ;               - LOOK
 GET_CMD     = 3                 ;               - GET
@@ -112,6 +105,8 @@ IS_TIMER    = $08               ;               - Timer Display
 IS_TRIGGER  = $10               ;               - Timer Trigger
 IS_GLOBAL   = $20               ;               - Usable from Anywhere
 IS_SCORED   = $40               ;               - Is scored
+IS_LIGHT    = $80               ;               - Light source
+IS_DARK     = $01               ; Room Property - Darkened
 EV          = $ff               ; Special action id for triggered action
 
 ; Initialize 
@@ -139,18 +134,19 @@ start:      ldx #ST_ITEM_L      ; Initialize inventory
             stx INVENTORY+1     ; ,,
             ldx #TIMER_START    ; Initialize timer
             stx TIMER           ; ,,            
-            ldx #1              ; Initialize starting room id
-            stx CURR_ROOM       ; ,,
-            dex                 ; X=0
+            lda #1              ; Initialize starting room id
+            jsr MoveTo          ; ,,
+            ldx #0              ; Init for score and for item location copy
             stx SCORE           ; Initialize score
 -loop:      inx                 ; Copy initial room location data to     
             lda ItemRoom-1,x    ;   RAM, so it can be updated as items are
             sta ITEM_ROOMS-1,x  ;   moved around
             lda Item1-1,x       ; Check for last item
             bne loop            ;   If not the last item, keep going
-            ldx #$1f            ; Clear the Seen Rooms list, which is used
--loop:      sta SEEN_ROOMS,x    ;   to show room details on first entry, then
-            dex                 ;   suppress for subsequent entries
+            ldx #$7f            ; Clear the Seen Rooms list, which is used
+            lda #0              ;   to show room details on first entry, then
+-loop:      sta SEEN_ROOMS,x    ;   suppress for subsequent entries
+            dex                 ;   ,,
             bne loop            ;   ,,
             cli                 ; Clear SEI from ROM hardware vector
             lda #<Intro         ; Show intro
@@ -201,7 +197,8 @@ Transcribe: ldx #0              ; Buffer index
             ; Fall through to Process
 
 ; Process Command
-; Start with the Action Engine. Look through the Action Database for             
+; Start with the Action Engine. Look through the Action Database for 
+; matching commands and execute them.            
 Process:    lda #0              ; Clear the action success and failure
             sta ACT_SUCCESS     ;   flags
             sta ACT_FAILURE     ;   ,,
@@ -212,17 +209,33 @@ next_act:   inx                 ; ,,
             jmp PostAction      ; Game-specific actions are done
 have_verb:  cmp VERB_ID         ; ,,
             bne next_act        ; ,,
-            lda ActItem,x       ; Get the item for this action
+filter_rm:  lda ActInRoom,x     ; Filter action by room
+            beq get_item        ;   If unset, keep going
+            cmp CURR_ROOM       ;   If the current room isn't the specified
+            bne next_act        ;     room, get next action
+get_item:   lda ActItem,x       ; Get the item for this action
             beq item_ok         ;   If the action specifies no item, skip
             cmp ITEM_ID         ; Does the item match the action's item?
             bne next_act        ;   If not, go back for next action            
-item_ok:    jsr ItemInRm        ; Is the item in the room?
+item_ok:    jsr ItemInRm        ; Is the item in the room (or global)
             bcs ch_cond         ;   If so, start checking conditions
-            lda ItemProp-1,x    ; If the item is not in the room, is it a
-            and #IS_GLOBAL      ;   global item?
-            beq ch_cond         ;   If so, start checking conditions
-            jmp NotHere         ; Indicate item is not around
-ch_cond:    lda ActInvCon,x     ; Is there an inventory item condition?
+            jmp NotHere         ; Indicate item is not around   
+ch_cond:    jsr EvalAction      ; Evaluate the action         
+            jmp next_act
+
+; Do Event
+; When an event triggers an action, clear the verb and item command ids
+; before performing that action, to prevent a loop of actions.           
+DoEvent:    cpx #0
+            bne do_event
+            rts
+do_event:   jsr NormCol
+            lda #0
+            sta ACT_SUCCESS
+            sta ACT_FAILURE
+            ; Fall through to EvalAction
+            
+EvalAction: lda ActInvCon,x     ; Is there an inventory item condition?
             beq inv_ok          ;   If not, it's unconditional
             jsr ItemInv         ; Is the player holding the specified item?
             bcc failure         ;   If not, the action fails
@@ -242,8 +255,7 @@ failure:    sec                 ; FAILURE!
             beq next_act        ;   ,, (If high byte=0, it's a silent failure)
             tay                 ;   ,,
             lda ActResTxtL,x    ;   ,,
-            jsr PrintAlt        ;   ,,
-            jmp next_act        ;   ,,
+            jmp PrintAlt        ;   ,,
 success:    sec                 ; SUCCESS!
             ror ACT_SUCCESS     ; Set the action success flag
             lda ActResTxtH,x    ; Show the success message for the action
@@ -259,8 +271,7 @@ game_over:  lda #<GameOverTx    ; If From=0 and To=0 then game over
             ldy #>GameOverTx    ;   Display the Game Over message...
             jsr PrintMsg        ;   ,,
 forever:    jmp forever         ; ...Then wait until RESTORE
-move_pl:    sta CURR_ROOM       ; Set current room specified by To ID
-            jmp next_act        ; Then continue processing actions
+move_pl:    jmp MoveTo          ; Set current room specified by To ID
 is_from:    sta FROM_ID         ; Store the From ID temporarily
             lda ActTo,x         ; A = To ID?
             bne xform           ;   If so, do the transform
@@ -272,10 +283,10 @@ is_from:    sta FROM_ID         ; Store the From ID temporarily
             beq not_trig        ;   ,,
             lda #TRIGGER        ;   ,,
             sta TIMER           ;   ,,
-not_trig:   jmp next_act        ; Contine processing
+not_trig:   rts                 ; Finish processing this action
 xform:      sta TO_ID           ; Transform - Put To where From is
             cmp FROM_ID
-            beq next_act2
+            beq eval_r
             ldy FROM_ID         ;   Get the From item's current location
             lda ITEM_ROOMS-1,y  ;   ,,
             ldy TO_ID           ;   And store it into the To index
@@ -289,20 +300,20 @@ xform:      sta TO_ID           ; Transform - Put To where From is
             lda TO_ID           ;   Update the item in hand
             sta INVENTORY       ;   ,,
             cmp INVENTORY+1     ; If the same thing is in the other hand,
-            bne next_act2       ;   then get rid of it
+            bne eval_r          ;   then get rid of it
             lda #0              ;   ,,
             sta INVENTORY+1     ;   ,,
             jmp next_act        ;   Check next action
 ch_inv2:    lda INVENTORY+1     ; Is the From item in the right hand?
             cmp FROM_ID         ;   ,,
-            bne next_act2       ;   If not, check next action
+            bne eval_r          ;   If not, finish evaluation
             lda TO_ID           ;   If so, switch
             sta INVENTORY+1     ;   ,,
             cmp INVENTORY       ; If the same thing is in the other hand
-            bne next_act2       ;   then get rid of it
+            bne eval_r          ;   then get rid of it
             lda #0              ;   ,,
             sta INVENTORY       ;   ,,
-next_act2:  jmp next_act        ;   Check next action
+eval_r:     rts                 ; Finish evaluating
 
 ; Perform Built-In Actions
 ; After the action processing is complete      
@@ -337,8 +348,8 @@ h_timer:    jsr AdvTimer        ; Timer countdown or advance
 post_r:     jmp Main            ; Return to Main main routine
 
 ; Do Drop
-; Of item ID
-DoDrop:     lda ITEM_ID         ; If no item id was found, show an
+; Of Item ID
+DoDrop:     lda ITEM_ID         ; If no Item ID was found, show an
             beq unknown         ;   error message
             ldy #1              ; Y is the hand index
 ch_hand:    lda INVENTORY,y     ; Is the specified item in this hand?
@@ -359,22 +370,27 @@ drop_now:   tax                 ; X is the item index
             cmp #SCORE_TGT      ; ,,
             bne drop_conf       ; ,,
             ldx #SCORE_ACT      ; If so, trigger the score action
-            jmp DoEvent         ; ,,
+            jsr DoEvent         ; ,,
 drop_conf:  jmp Confirm         ; Show the confirmation message
 drop_r:     jmp Main            ; Return to Main routine
 
 ; Do Look                        
-DoLook:     lda ITEM_ID         ; Get the current item id
-            bne SingleItem      ; If there's an item id, then LOOK at it
+DoLook:     jsr IsLight         ; If this is a dark room, and player has no
+            bcs sees_look       ;   light source items, just show the "no light"
+ShowNoSee:  lda #<NoLightTx     ;   message
+            ldy #>NoLightTx     ;   ,,
+            jmp PrintRet        ;   ,,
+sees_look:  lda ITEM_ID         ; Get the current Item ID
+            bne SingleItem      ; If there's an Item ID, then LOOK at it
             jsr RoomDesc        ; Show room desciption
             jmp Main            
             ; Look at a single item
-SingleItem: jsr ItemInRm        ; The LOOK command took an item id. Is that item
+SingleItem: jsr ItemInRm        ; The LOOK command took an Item ID. Is that item
             bcs in_room         ;   in the current room?
 NotHere:    lda #<NotHereTx     ; If the specified item isn't in the room or
             ldy #>NotHereTx     ;   inventory, show a message and go back
             jmp PrintRet        ;   for another command
-in_room:    tax                 ; X = specified item id
+in_room:    tax                 ; X = specified Item ID
             lda ItemTxtH-1,x    ; Show the description of the item
             tay                 ; ,,
             lda ItemTxtL-1,x    ; ,,
@@ -412,8 +428,7 @@ look_r:     jmp Main            ; Return to Main routine
 DoGo:       ldx #0              ; Starting from the first character,
             jsr GetPattern      ;   skip the first pattern (GO/MOVE)
             jsr GetPattern      ;   and get the second
-ShortGo     jsr SetRmAddr       ; Get room address to (RM)
-            ldy #5              ; 5 is room index for North parameter
+ShortGo     ldy #5              ; 5 is room index for North parameter
 -loop:      lda Directions,y    ; A is character for direction
             cmp PATTERN         ; Is this the attempted direction?
             beq try_move        ;   If so, try moving that way
@@ -422,27 +437,31 @@ ShortGo     jsr SetRmAddr       ; Get room address to (RM)
             bmi invalid         ; Direction name not found
 try_move:   lda (RM),y          ; Get the room id at the found index
             beq go_fail         ; Player is going an invalid direction
-            sta CURR_ROOM       ; But if direction is valid, set room
+            jsr MoveTo          ; Set room address (RM) and CURR_ROOM            
             jsr AdvTimer        ; Timer advance or countdown on move
 GameEntry:  lda #COL_ROOM       ; Always show room name after move
             jsr CHROUT          ; ,,
             jsr Linefeed        ; ,,
             jsr RoomName        ; ,,
             jsr PrintMsg        ; ,,
-ch_visited: ldx CURR_ROOM       ; Is this the first time this room has been
-            lda SEEN_ROOMS-1,x  ;   visited?
-            bne ch_rm_act       ; Already been visitied, so check action
-            lda #1              ; Otherwise, flag the room as seen, and
-            sta SEEN_ROOMS-1,x  ;   show everything else
-            jsr RoomDesc        ; Show room description
-ch_rm_act:  jsr SetRmAddr       ; Is there an entry action for this room?
-            ldy #8              ; ,,
+ch_rm_act:  ldy #6              ; Is there an entry action for this room?
             lda (RM),y          ; ,,
-            beq go_r            ; ,,
+            beq ch_first        ; ,,
             tax                 ; If so, set action and
-            jmp DoEvent         ;   attempt it            
+            jsr DoEvent         ;   attempt it
+            bit ACT_SUCCESS     ; If the room action was successful, don't
+            bmi go_r            ;   show anything further
+ch_first:   ldx CURR_ROOM       ; Is this the first time this room has been
+            lda SEEN_ROOMS-1,x  ;   visited?
+            bne go_r            ; Already been visitied, so leave
+            jsr RoomDesc        ; Show room description
+            jmp Main         
 invalid:    jmp ShowErr         ; Like Nonsense, but don't look at shortcuts
-go_fail:    lda #<NoPathTx      ; Show "no path" message and return to Main
+go_fail:    jsr IsLight         ; Failed to move. If there's light in the room
+            bcs sees_path       ;   the player can see that they've moved
+            jsr Linefeed        ; If it's dark, simply complain about it
+            jmp ShowNoSee       ; ,,
+sees_path:  lda #<NoPathTx      ; Show "no path" message and return to Main
             ldy #>NoPathTx      ; ,,
 PrintRet:   jsr PrintMsg        ; ,,
 go_r:       jmp Main    
@@ -542,7 +561,7 @@ verb_found: lda VerbID-1,y      ; Cross-reference VerbID to handle synonyms
             rts                 ; ,,
             
 ; Is Item In Room?
-; Specify item ID in A  
+; Specify Item ID in A  
 ; Carry set if in room          
 ItemInRm:   tay
             lda ITEM_ROOMS-1,y
@@ -553,6 +572,10 @@ in_inv:     cmp INVENTORY
             beq yes_in_rm
             cmp INVENTORY+1
             beq yes_in_rm
+ch_global:  lda ItemProp-1,y
+            and #IS_GLOBAL
+            bne yes_in_rm
+            tya
             clc
             rts
 yes_in_rm:  tya
@@ -560,7 +583,7 @@ yes_in_rm:  tya
             rts
 
 ; Is Item In Inventory
-; Specify item ID in A  
+; Specify Item ID in A  
 ; Carry set if in inventory          
 ItemInv:    tay
             jmp in_inv
@@ -573,7 +596,7 @@ ItemInv:    tay
 ; Note that an ItemID of 0 is not necessarily an error. It just means that
 ; the player specified a verb only, which is often fine.   
 GetItemID:  ldy #0              ; Item index
-            sty ITEM_ID         ; Default (unfound) item ID
+            sty ITEM_ID         ; Default (unfound) Item ID
 -loop:      iny                 ; Advance the index
             lda Item1-1,y       ; Get the first character of this item
             beq itemid_r        ; If end of list, return with ItemID at 0
@@ -588,16 +611,19 @@ GetItemID:  ldy #0              ; Item index
             sty ITEM_ID         ; Item has been found. Set ItemID and return
 itemid_r:   rts                 ; ,,
 
-; Set Room Address
-; Find current room's starting data address and store it in (RM)
-SetRmAddr:  lda #<Rooms         ; Set starting room address
+; Move To Room
+; Set current room to A and add room parameter address to (RM)
+MoveTo:     sta CURR_ROOM
+            txa
+            pha
+            lda #<Rooms         ; Set starting room address
             sta RM              ; ,,
             lda #>Rooms         ; ,,
             sta RM+1            ; ,,
             ldx CURR_ROOM       ; X = room id
             dex                 ; zero-index it
             beq setaddr_r       ; if first room, (RM) is already set
--loop:      lda #9              ; Add 8 for each id
+-loop:      lda #10              ; Add 10 for each id
             clc                 ; ,,
             adc RM              ; ,,
             sta RM              ; ,,
@@ -605,13 +631,17 @@ SetRmAddr:  lda #<Rooms         ; Set starting room address
             inc RM+1            ; ,,
 nc1:        dex                 ; ,,
             bne loop            ; Multiply
-setaddr_r:  rts
+setaddr_r:  pla
+            tax
+            rts
 
 ; Set Room Name
 ; Set up A and Y for room description display. This should be followed by
 ; PrintAlt (for name), or PrintMsg (for description)         
-RoomName:   jsr SetRmAddr       ; Get room address to (RM)
-            ldy #6              ; 6 = low byte parameter
+RoomName:   jsr IsLight
+            bcs sees_name
+            jmp ShowNoSee
+sees_name:  ldy #8              ; 8 = desc low byte parameter
             lda (RM),y          ; A is low byte
             pha                 ; Push low byte to stack
             iny                 ; 7 = high byte parameter
@@ -631,12 +661,19 @@ AdvTimer:   lda TIMER           ; If the timer is 0, then it's not active
             pla                 ; This was called via JSR, so pull the return
             pla                 ;   address off the stack
             ldx #TIMEOUT_ACT    ; Do the specified timeout action
-            jmp DoEvent         ; ,,
+            jsr DoEvent         ; ,,
 timer_r:    rts
 
-RoomDesc:   jsr NormCol         ; Otherwise look refers to a whole room
-            jsr RoomName        ; Show its name
+RoomDesc:   jsr IsLight
+            bcs sees_desc
+            jmp ShowNoSee
+sees_desc:  jsr NormCol         ; Otherwise look refers to a whole room
+            jsr RoomName        ; Get room information
             jsr PrintAlt        ; ,,
+            ldx CURR_ROOM       ; Flag the room as seen
+            lda #1              ; ,,
+            sta SEEN_ROOMS-1,x  ; ,,
+
             ; Fall through to ItemDisp
 
             ; Item display
@@ -663,7 +700,6 @@ DirDisp:    lda #COL_DIR
             jsr CHROUT
             lda #'('            ; Open paren
             jsr CHROUT          ; ,,
-            jsr SetRmAddr       ; Get room address to (RM)
             ldy #5              ; 5 is room index for North parameter
 -loop:      lda (RM),y          ; Get room id for room in this direction
             beq next_dir        ; Is there a room that way?
@@ -713,6 +749,26 @@ ch_score:   ldx SCORE
             jsr PRTFIX
             jsr Linefeed
 score_r:    rts
+ 
+; Is Light
+; Is there light in the current room?
+; Carry set if yes
+IsLight:    ldy #7              ; Get room property
+            lda (RM),y          ; ,,
+            and #IS_DARK        ; Is this a dark room?
+            beq room_light      ;   If not return with cary set
+            ldy #1              ; Hand index
+-loop:      lda INVENTORY,y     ; Does this hand contain a light source?
+            tax                 ; ,,
+            lda ItemProp-1,x    ; ,, Get item property
+            and #IS_LIGHT       ; ,,
+            bne room_light      ; ,,
+            dey                 ; Check the other hand
+            bpl loop            ; ,,
+            clc                 ; No hands had a light source, so clear
+            rts                 ;   carry for darkness
+room_light: sec                 ; The room is well-illuminated, so set
+            rts                 ;   carry for light
             
 ; Print Alternate Message
 ; Given the Message address (A, Y), look for the EOL+1, then print from there
@@ -740,19 +796,12 @@ PrintMsg:   pha
             pla
 PrintNoLF:  stx TEMP+2
             jsr PRINT
-            jsr Linefeed
-            ldx TEMP+2
+            cpy #0              ; If nothing was printed, skip the
+            beq print_r         ;   line feed
+            jsr Linefeed        ; 
+print_r:    ldx TEMP+2
             rts
  
-; Do Event
-; When an event triggers an action, clear the verb and item command ids
-; before performing that action, to prevent a loop of actions.           
-DoEvent:    jsr NormCol
-            lda #0
-            sta VERB_ID
-            sta ITEM_ID
-            jmp ch_cond
-
 ; Normal Color Shortcut
 NormCol:    lda #COL_NORM
             .byte $3c
@@ -783,55 +832,57 @@ NotHereTx:  .asc COL_ALERT,"tHAT'S NOT HERE",EOL
 NoPathTx:   .asc COL_ALERT,"yOU CAN'T GO THAT WAY",EOL
 NoMoveTx:   .asc COL_ALERT,"tHAT WON'T MOVE",EOL
 FullTx:     .asc COL_ALERT,"bOTH HANDS ARE FULL",EOL
+NoLightTx:  .asc COL_ALERT,"yOU CANNOT SEE",EOL
 ConfirmTx:  .asc COL_ALERT,"ok",EOL
 
 ; Verbs
 ;   VerbID - Cross-referenced ID list for verb synonyms
-; Basic - GO (MovE), LooK (L), GeT (TakE), DroP, InventorY (I)
-; Game - TALK(6), WIND(7), DIAL(8), SET(2), SWAP(9), BUY(10)
+; Basic - GO (MovE), LooK (L,EX), GeT (TakE), DroP, InventorY (I)
+; Game - TALK(6), WIND(7), DIAL(8), SET(2), SWAP(9), BUY(10), CATCH(11)
+;        OPEN(12)
 ; Verb IDs are 1-indexed
-Verb1:      .byte 'G','M','L','L','G','T','D','I','I'     ; Basic Verbs
-            .byte 'T','W','D','R','S','B','C',EOL
-VerbL:      .byte 'O','E','K','L','T','E','P','Y','I'     ; Basic Verbs
-            .byte 'K','D','L','D','P','Y','H'
-VerbID:     .byte 1,1,2,2,3,3,4,5,5                       ; Basic Verbs
-            .byte 6,7,8,2,9,10,11
+Verb1:      .byte 'G','M','L','L','E','G','T','D','I','I'   ; Basic Verbs
+            .byte 'T','W','D','R','S','B','C','O',EOL
+VerbL:      .byte 'O','E','K','L','X','T','E','P','Y','I'   ; Basic Verbs
+            .byte 'K','D','L','D','P','Y','H','N'
+VerbID:     .byte  1,  1,  2,  2,  2,  3,  3,  4,  5,  5    ; Basic Verbs
+            .byte  6,  7,  8,  2,  9, 10, 11, 12
 
 ; Rooms
 ; Room IDs are 1-indexed
-Rooms:      ; Main Facility
-            ;     D, U, E, W, S, N, DescL, DescH, ActID
-            .byte 2, 0, 0, 0, 0, 0,<rIntake,>rIntake,0
-            .byte 0, 1, 3, 0, 0, 0,<rOffice,>rOffice,0
-            .byte 0, 0, 0, 2, 0, 0,<rPlaza,>rPlaza,2
+Rooms:      ; Main Facility (1-3)
+            ;     D, U, E, W, S, N, ActID, RmProp, DescL, DescH
+            .byte 2, 0, 0, 0, 0, 0, 0, 0, <rIntake,>rIntake
+            .byte 0, 1, 3, 0, 0, 0, 0, 0, <rOffice,>rOffice
+            .byte 0, 0, 0, 2, 0, 0, 2, 0, <rPlaza,>rPlaza
             
-            ; Graff House, 1776
-            ;     D, U, E, W, S, N, DescL, DescH, ActID
-            .byte 0, 0, 5, 0, 0, 0,<rCorner,>rCorner,0
-            .byte 0, 7, 0, 4, 0, 0,<rFoyer,>rFoyer,0 
-            .byte 5, 0, 0, 0, 0, 7,<rJeffRoom,>rJeffRoom,0 
-            .byte 5, 0, 0, 0, 6, 8,<rLanding,>rLanding,0
-            .byte 0, 0, 0, 0, 7, 0,<rJeffBed,>rJeffBed,0
+            ; Graff House, 1776 (4-8)
+            ;     D, U, E, W, S, N, ActID, RmProp, DescL, DescH
+            .byte 0, 0, 5, 0, 0, 0, 0, 0, <rCorner,>rCorner
+            .byte 0, 7, 0, 4, 0, 0, 0, 0, <rFoyer,>rFoyer
+            .byte 0, 0, 0, 0, 0, 7, 0, 0, <rJeffRoom,>rJeffRoom
+            .byte 5, 0, 0, 0, 6, 8, 0, 0, <rLanding,>rLanding
+            .byte 0, 0, 0, 0, 7, 0, 0, 0, <rJeffBed,>rJeffBed
             
-            ; Navin Field, 1934
-            ;     D, U, E, W, S, N, DescL, DescH, ActID
-            .byte 0, 0, 0, 0, 0,14,<rTBooth,>rTBooth,0
-            .byte 0, 0,11,13,14,12,<rHomeSt,>rHomeSt,18
-            .byte 0, 0, 0,12,10, 0,<rRightF,>rRightF,14
-            .byte 0, 0,11,13,10, 0,<rCenterF,>rCenterF,18
-            .byte 0, 0,12, 0,10, 0,<rLeftF,>rLeftF,0
-            .byte 0, 0, 0, 0, 9,10,<rCorridor,>rCorridor,11
-            .byte 0, 0,15,15, 0, 0,<rJail,>rJail,0
+            ; Navin Field, 1934 (9-15)
+            ;     D, U, E, W, S, N, ActID, RmProp, DescL, DescH
+            .byte 0, 0, 0, 0, 0,14, 0,  0, <rTBooth,>rTBooth
+            .byte 0, 0,11,13,14, 0, 18, 0, <rHomeSt,>rHomeSt
+            .byte 0, 0, 0,12,10, 0, 14, 0, <rRightF,>rRightF
+            .byte 0, 0,11,13,10, 0, 18, 0, <rCenterF,>rCenterF
+            .byte 0, 0,12, 0,10, 0, 0,  0, <rLeftF,>rLeftF
+            .byte 0, 0, 0, 0, 9,10, 11, 0, <rCorridor,>rCorridor
+            .byte 0, 0,15,15, 0, 0, 0,  0, <rJail,>rJail
             
-            ; Nefertari's Tomb, 1256BC
-            ;     D, U, E, W, S, N, DescL, DescH, ActID
-            .byte 0, 0,17, 0, 0, 18,<rAnteCh,>rAnteCh,0
-            .byte 0, 0, 0,17, 0, 0 ,<rSideCh,>rSideCh,0
-            .byte 19,0, 0, 0, 16,0 ,<rRamp,>rRamp,0
-            .byte 0,18,21,20, 0, 22,<rSarcRm,>rSarcRm,0
-            .byte 0,0, 19, 0, 0, 0 ,<rWAnnex,>rWAnnex,0
-            .byte 0,0,  0,19, 0, 0 ,<rEAnnex,>rEAnnex,0
-            .byte 0,0,  0, 0,19, 0 ,<rResOs,>rResOs,0
+            ; Nefertari's Tomb, 1256BC (16-22)
+            ;     D, U, E, W, S, N, ActID, RmProp, DescL, DescH
+            .byte 0, 0,17, 0, 0, 18, 0, 1, <rAnteCh,>rAnteCh
+            .byte 0, 0, 0,16, 0, 0 , 0, 1, <rSideCh,>rSideCh
+            .byte 19,0, 0, 0, 16,0 , 0, 1, <rRamp,>rRamp
+            .byte 0,18,21,20, 0, 22, 0, 1, <rSarcRm,>rSarcRm
+            .byte 0,0, 19, 0, 0, 0 , 0, 1, <rWAnnex,>rWAnnex
+            .byte 0,0,  0,19, 0, 0 , 0, 1, <rEAnnex,>rEAnnex
+            .byte 0,0,  0, 0,19, 0 , 0, 1, <rResOs,>rResOs
 
 ; Room Descriptions
 ;     The room name is terminated by EOL, after which is the room description,
@@ -847,7 +898,7 @@ rOffice:    .asc "bOSS'S oFFICE",EOL,"tHE bOSS ISN'T ALWAYS",LF
             .asc "'dAMN BUSY DAY,",LF,"TODAY,' SHE SAYS.",LF,LF
             .asc "tHE DOOR TO THE EAST",LF,"IS MARKED WITH A HUGE",LF
             .asc "RED EXLAMATION POINT.",EOL
-rPlaza:     .asc "pLAZA",EOL,"WHAT?",EOL
+rPlaza:     .asc "pLAZA",EOL,EOL
 
             ; Graff House, 1776
 rCorner:    .asc "cORNER",EOL,"tHE CORNER OF 7TH AND",LF,"mARKET sTREET IN",LF
@@ -869,19 +920,19 @@ rJeffRoom:  .asc "pARLOR",EOL,"sOMEBODY IS DOING A",LF,"LOT OF WRITING HERE.",LF
             .asc "BRIMS WITH REJECTED",LF,"DRAFTS READING 'iN",LF
             .asc "cONGRESS.'",EOL   
 rJeffBed:   .asc "bED cHAMBER",EOL,"tHE BED IS NEATLY",LF
-            .asc "MADE. wHOEVER RENTS",LF,"THIS ROOM DOESN'T",LF
-            .asc "SLEEP MUCH.",EOL
+            .asc "MADE AND TINY.",LF,"wHOEVER RENTS THIS",LF
+            .asc "ROOM DOESN'T SLEEP",LF,"MUCH.",EOL
 rTBooth:    .asc "tICKET bOOTH",EOL,"nAVIN fIELD, dETROIT.",LF,LF
             .asc "tODAY THE tIGERS ARE",LF,"PLAYING THE yANKEES",LF
             .asc "WITH bABE rUTH. tHIS",LF,"IS A SPECIAL DAY.",LF,LF
             .asc "a FRECKLY KID AT THE",LF,"COUNTER IS BARKING,",LF
-            .asc "'tICKETS! gET YOUR",LF,"TICKETS hERE!'",EOL
+            .asc "'tICKETS! bUY YOUR",LF,"TICKETS HERE!'",EOL
 rHomeSt:    .asc "hOME pLATE sTANDS",EOL,"tHE GREEN OF THE",LF
             .asc "DIAMOND IS SOMETHING",LF,"YOU'LL NEVER FORGET,",LF
             .asc "AS ARE THE SOUNDS OF",LF,"THE BAT AND THE SMELL",LF
             .asc "OF THE ALMONDS.",LF,LF,"bUT YOU DON'T WANT TO",LF
             .asc "BE BEHIND THE PLATE.",LF,LF,"lEFT fIELD IS TO THE",LF
-            .asc "EAST, AND rIGHT fIELD",LF,"TO THE WEST.",EOL
+            .asc "WEST, AND rIGHT fIELD",LF,"TO THE EAST.",EOL
 rRightF:    .asc "rIGHT fIELD sTANDS",EOL,"tHE CROWD ROARS.",EOL
 rCenterF:   .asc "cENTER fIELD sTANDS",EOL,"tHE CROWD OUT HERE IS",LF
             .asc "RAUCOUS, EVEN FOR",LF,"dETROIT. yOU'RE",LF
@@ -896,14 +947,23 @@ rCorridor:  .asc "cORRIDOR",EOL,"sTANDS ARE TO THE",LF,"NORTH.",EOL
 rJail:      .asc "dETROIT jAIL",EOL,"tHE CELL IS LIKE 2x2",LF
             .asc "METERS. iT'S SUPER",LF,"EMBARASSING.",LF,LF
             .asc "hOPEFULLY YOU HAVE",LF,"YOUR REEL.",EOL
-rAnteCh:
-rSideCh:  
-rRamp:
-rSarcRm:
-rWAnnex:
-rEAnnex:
-rResOs:
-
+rAnteCh:    .asc "aNTECHAMBER",EOL,"tOMB OF nEFERTARI,",LF
+            .asc "vALLEY OF THE qUEENS,",LF,"lUXOR.",LF,LF
+            .asc "tHE SMARTPHONE HAS",LF,"ENOUGH ILLUMINATION",LF
+            .asc "FOR YOU TO FIND YOUR",LF,"WAY, AND FOR YOU TO",LF
+            .asc "APPRECIATE THE RICHLY",LF,"COLORED illustrations",LF
+            .asc "THAT COVER THE WALLS.",EOL
+rSideCh:    .asc "sIDE cHAMBER",EOL,"tO THE RIGHT OF THE",LF
+            .asc "aNTECHAMBER IS THE",LF,"MUCH SMALLER sIDE",LF
+            .asc "cHAMBER. cOLORFUL",LF,"illustrations COVER",LF
+            .asc "EACH WALL,A DIFFERENT",LF,"STYLE ON EVERY",LF
+            .asc "SURFACE.",EOL
+rRamp:      .asc "rAMP",EOL,"tHIS DARK, STEEP RAMP",LF,"HEADS DOWN TO A LARGE"
+            .asc "CHAMBER.",EOL
+rSarcRm:    .asc "sARCOPHAGUS rOOM",EOL,"hELLO",EOL
+rWAnnex:    .asc "wESTERN aNNEX",EOL,EOL
+rEAnnex:    .asc "eASTERN aNNEX",EOL,EOL
+rResOs:     .asc "rESIDENCE OF oSIRIS",EOL,EOL
             
 ; Items
 ;   Item1    - First Character
@@ -916,27 +976,30 @@ rResOs:
 ;     Bit 3 = Is timekeeping device (shows number of action attempts) 
 ;     Bit 4 = Is trigger for timer (when this item is moved to a room, the
 ;             timer starts)
-;     Bit 5 = Is global (can be interacted with from a different room)
+;     Bit 5 = Is global (can be interacted with from any room)
 ;     Bit 6 = Is scored (counts as 1 point when dropped in score room)
+;     Bit 7 = Is light source (rooms with "is dark" can be seen)
 ;   ItemTxt  - Address of item name and description
 ;   (The item name is terminated by EOL, after which is the item description,
 ;    also terminated by EOL)
 ; 
 ; Item IDs are 1-indexed
-Item1:      .byte 'C','C','B','R','Q','W','1','D','1','P','*','J','B'
-            .byte 'T','S','1','G','*','*','*','1',EOL
+Item1:      .byte 'C','C','B','R','Q','W','1','D','1','S','*','J','B'
+            .byte 'T','C','1','G','*','*','*','1','S','P','I',EOL
 ItemL:      .byte 'R','E','S','L','A','H','6','K','1','E','*','N','L'
-            .byte 'T','E','4','E','*','*','*','C'
+            .byte 'T','N','4','E','*','*','*','C','S','E','S'
 ItemRoom:   .byte  1 , 1,  2 , 2 , 1 , 0,  1 , 6 , 1 , 1 , 6 , 0 , 0
-            .byte  0 , 8,  1 ,13 ,11 , 0,  0 , 1
-ItemProp:   .byte  3 , 3,  3 , 0 , 0 , 8,  3 ,$40, 3 , 0 , 7 , 2 ,$40
-            .byte  0 , 0,  3 , 1 , 7 , 7,  7 , 3
+            .byte  0 , 8,  1 ,13 ,11 , 0,  0 , 1 ,19 ,19 , 0
+ItemProp:   .byte  3 , 3,  3 , 0, 0 , 8,  3 ,$40,  3 ,$80, 7 , 2 ,$40
+            .byte  0 , 0,  3 , 1 , 7 , 7,  7 , 3,  2 , 0 ,35
 ItemTxtL:   .byte <iCursor,<iConsole,<iBoss,<iReel,<iQuota,<iWatch,<iYear
             .byte <iDesk,<iYear,<iPhone,0,<iJefferson,<iBall,<iTicket
-            .byte <iSixpence,<iYear,<iGlove,0,0,0,<iYear
+            .byte <iSixpence,<iYear,<iGlove,0,0,0,<iYear,<iSarc,<iPlaque
+            .byte <iIllus
 ItemTxtH:   .byte >iCursor,>iConsole,>iBoss,>iReel,>iQuota,>iWatch,>iYear
             .byte >iDesk,>iYear,>iPhone,0,>iJefferson,>iBall,>iTicket
-            .byte >iSixpence,>iYear,>iGlove,0,0,0,>iYear
+            .byte >iSixpence,>iYear,>iGlove,0,0,0,>iYear,>iSarc,>iPlaque
+            .byte >iIllus
 
 ; Item Descriptions
 iCursor:    .asc "cURSOR",EOL,"tHE CURSOR LOOKS LIKE",LF
@@ -958,15 +1021,15 @@ iBoss:      .asc "tHE boss",EOL,"tHE bOSS LOOKS LIKE A",LF
             .asc "KNOW YOU CAN ALWAYS",LF,"talk TO HER.",EOL
 iReel:      .asc "tEMPORAL reel",EOL,"tHE REEL IS THE",LF
             .asc "REMOTE COMPONENT OF",LF,"THE CURSOR. iT'S A",LF
-            .asc "HAND-SIZED WHEEL WITH",LF,"A SMALLER WHEEL",LF
-            .asc "STICKING OUT, SOFTLY",LF,"WHIRRING, WITH A",LF
+            .asc "PALM-SIZED WHEEL WITH",LF,"A PARALLEL SMALLER",LF
+            .asc "WHEEL AFFIXED, SOFTLY",LF,"WHIRRING, WITH A",LF
             .asc "PULSING AMBER LIGHT.",LF,LF
             .asc "yOU OPERATE IT BY",LF,"windING IT.",EOL
-iQuota:     .asc "quota SHEET",EOL,"DUE TODAY:",LF,LF,"  1776",LF
-            .asc "  * 1934",LF," * 2022",LF," * 1330BC",LF,"  23",LF,LF
+iQuota:     .asc "quota SHEET",EOL,"--dUE tODAY--",LF,LF," * 1776",LF
+            .asc " * 1934",LF," * 2022",LF," * 1255bc",LF," * 23",LF,LF
             .asc "cHERNOV COLLECTS",LF,"YOUR iNTAKE AT 17:00.",LF,
             .asc "yOU JUST NEED TO drop",LF,"ASSETS IN THIS ROOM.",EOL
-iWatch:     .asc "pOCKET watch",EOL,"18th cENTURY. a GIFT",LF
+iWatch:     .asc "pOCKET watch",EOL,"18TH cENTURY. a GIFT",LF
             .asc "FROM dAD. oRNATE.",EOL
 iYear:      .asc "jUST A YEAR",EOL,"dial THE YEAR INTO",LF,"THE CONSOLE.",EOL
 iDesk:      .asc "jEFFERSON'S desk",EOL,"tHIS IS THE DESK THAT",LF
@@ -975,22 +1038,39 @@ iDesk:      .asc "jEFFERSON'S desk",EOL,"tHIS IS THE DESK THAT",LF
             .asc "GOES MISSING, HE'LL",LF,"WRITE IT ON SOMETHING",LF
             .asc "ELSE.",LF,LF,"iF IT SEEMS THERE'S A",LF
             .asc "PARADOX HERE, THAT'S",LF,"cHERNOV'S PROBLEM.",EOL
-iPhone:     .asc "cELL phone",EOL,"nOT IN THE LEAST",LF,"ANACHRONISTIC, IT'S"
-            .asc LF,"AN 150MM BY 75MM SLAB",LF,"WITH AN oled SCREEN.",LF,LF
+iPhone:     .asc "smartphone",EOL,"nOT IN THE LEAST",LF,"ANACHRONISTIC, IT'S"
+            .asc LF,"A 150MM BY 75MM SLAB",LF,"WITH A BRIGHT SCREEN.",LF,LF
             .asc "zERO BARS.",EOL
 iJefferson: .asc "tHOMAS jefferson",EOL,"yES, that jEFFERSON.",EOL
 iBall:      .asc "rUTH'S hOME rUN ball",EOL,"bABE rUTH HIT HIS",LF
             .asc "700TH HOME RUN WITH",LF,"THIS BASEBALL.",EOL
 iTicket:    .asc "bASEBALL ticket",EOL,"jULY 14, 1934 tIGERS",LF
             .asc "VS. yANKEES $1.40",EOL
-iSixpence:  .asc "sixpence pIECE",EOL,"aN OLD bRITISH COIN,",LF
+iSixpence:  .asc "sIXPENCE coin",EOL,"aN OLD bRITISH COIN,",LF
             .asc "WORTHLESS NOW.",EOL
 iGlove:     .asc "bASEBALL glove",EOL,"iT'S A TAD SMALL,",LF
             .asc "AS A CHILD'S GLOVE,",LF,"BUT IT SHOULD WORK.",EOL
+iPlaque:    .asc "iNSCRIBED gOLD plaque",EOL,"yOUR ANCIENT eGYPTIAN",LF,
+            .asc "IS RUSTY... mAYBE:",LF,LF,COL_ALERT
+            .asc "take no  gold  from my",LF,"birthright,  lest  its",LF
+            .asc "curse snuff your light",LF
+            .asc "(silver & bronze too!)",LF,COL_NORM
+            .asc "eGYPTIAN MUMMY CURSE?",LF,"that CAN'T BE A REAL",LF
+            .asc "THING. rIGHT...?",EOL
+iSarc:      .asc "sarcophagus",EOL,"nEFERTARI'S FINAL",LF
+            .asc "RESTING PLACE IS",LF,"AMAZING, LIKE",LF
+            .asc "EVERYTHING HERE.",LF,"sTUNNING ROSE",LF
+            .asc "GRANITE, INLAID WITH",LF,"GOLD AND CARNELIAN.",LF
+            .asc "tHE qUEEN'S CARVED",LF,"FACE LOOKS HOPEFULLY",LF
+            .asc "AT THE CEILING.",EOL
+iIllus:     .asc EOL,"tHEY JUST CAN'T BE",LF,"ADEQUATELY EXPRESSED",LF
+            .asc "IN THIS MEDIUM. iF",LF,"YOU'RE STUCK IN THE",LF
+            .asc "21st CENTURY, TRY",LF,"gOOGLE.",EOL
 
 ; Actions
 ;   ActVerb    - The Verb ID for this action
 ;   ActItem    - The Item ID for this action. If 0, no item is used.
+;   ActInRoom  - The Room ID for this action. If 0, no room is required.
 ;   ActInvCon  - The player must be holding this Item ID for success in this
 ;                action. If 0, no item needs to be held.
 ;   ActRoomCon - The Item ID must be in this room for success in this action.
@@ -1018,7 +1098,7 @@ iGlove:     .asc "bASEBALL glove",EOL,"iT'S A TAD SMALL,",LF
 ;                If both ActFrom and ActTo are 0, then the text is displayed and 
 ;                the game ends.
 ;
-;                If both ActFrom and ActTo are the same non-zero item id, only
+;                If both ActFrom and ActTo are the same non-zero Item ID, only
 ;                messages will be displayed.
 ;   ActResTxt  - The address of the success and failure messasges
 ;                (The success message is terminated by EOL, after which is the
@@ -1027,27 +1107,29 @@ iGlove:     .asc "bASEBALL glove",EOL,"iT'S A TAD SMALL,",LF
 ; Action IDs are zero-indexed, and the action id $ff (EV) is reserved for
 ; actions triggered by events (timer target, enters-room, score target)
 ActVerb:    .byte 6,7,EV,8,8,3, 3,  6, 9,  9, 9,EV, 8,10,EV,11,11,11
-            .byte EV,EOL
+            .byte EV, 8,12,EOL
 ActItem:    .byte 3,4,0, 7,9,8, 8, 12,10,  4, 0,0 ,16,14, 0,13,13,13
-            .byte 0
-ActInvCon:  .byte 0,4,0, 0,0,0, 0,  0,10,  4, 0,0 , 0,15, 0,0, 17,0
-            .byte 13
+            .byte 0, 21,22
+ActInRoom:  .byte 0,0,0, 0,0,0, 0,  0, 0,  0, 0,0,  0, 0, 0,11,11,11
+            .byte 0,  0, 0
+ActInvCon:  .byte 0,4,0, 0,0,0, 0,  0,10,  4, 0,0,  0,15, 0, 0,17, 0
+            .byte 13, 0, 0
 ActRoomCon: .byte 3,0,0, 1,1,11,12, 0,12, 12,12,0 , 1, 0,18,20,19,19
-            .byte 0
-ActInvExcl: .byte 0,1,0, 0,0,8, 8,  8, 8,  8, 8,14, 0, 0, 0,0, 0, 0
-            .byte 0
+            .byte 0,  1, 0
+ActInvExcl: .byte 0,1,0, 0,0,8, 8,  8, 8,  8, 8,14, 0, 0, 0,0,  0, 0
+            .byte 0,  0, 0
 ActFrom:    .byte 1,0,0, 0,0,11,1,  1, 10, 4, 1,0 , 0,15,18,1, 17,19
-            .byte 0
+            .byte 0,  0, 1
 ActTo:      .byte 1,1,0, 4,0,12,1,  1, 8,  8, 1,9 , 9,14,19,1, 13,20
-            .byte 15
+            .byte 15,16, 1
 ActResTxtL: .byte <aBoss,<aHome,<aDie,<aX,<a1841,<aJeffEnter,<aJeffSay
             .byte <aJeffOffer,<aJeffAcc,<aJeffAcc,<aJeffDecl
-            .byte <aNeedTix,<aX,<aBuyTix,<aBallHit,<aNoCatch,<aCatch,0
-            .byte <aToJail
+            .byte <aNeedTix,<aX,<aBuyTix,<aBallHit,<aMissed,<aTryCatch,0
+            .byte <aToJail,<aX,<aOpSarc
 ActResTxtH: .byte >aBoss,>aHome,>aDie,>aX,>a1841,>aJeffEnter,>aJeffSay
             .byte >aJeffOffer,>aJeffAcc,>aJeffAcc,>aJeffDecl
-            .byte >aNeedTix,>aX,>aBuyTix,>aBallHit,>aNoCatch,>aCatch,0
-            .byte >aToJail
+            .byte >aNeedTix,>aX,>aBuyTix,>aBallHit,>aMissed,>aTryCatch,0
+            .byte >aToJail,>aX,>aOpSarc
             
 ; Action Results
 aBoss:      .asc "'hAVE A GREAT DAY,",LF,"AND DON'T FORGET YOUR",LF
@@ -1059,11 +1141,11 @@ aHome:      .asc CLRHOME,"bEING REELED BACK IS",LF,"ALWAYS DISCONCERTING.",LF
             .asc "ONLY A MOMENT AND",LF,"YOU'RE BACK TO YOUR",LF
             .asc "iNTAKE rOOM.",EOL
             .asc "yOU DON'T HAVE A",LF,"TEMPORAL REEL.",EOL
-aDie:       .asc "tHE bOSS RUSHES TO",LF,"TACKLE YOU BUT IT'S",LF
-            .asc "TOO LATE. yOU NOTICE",LF,"A MAGNIFICENT FUTURE",LF
-            .asc "CITYSCAPE FOR ONLY A",LF,"MOMENT BEFORE THE",LF
-            .asc "bUBBLE COLLAPSES",LF,"AROUND YOU AND YOU",LF
-            .asc "STOP EXISTING.",EOL,EOL
+aDie:       .asc CRSRUP,CRSRUP,CRSRUP,CRSRUP,"tHE bOSS RUSHES TO",LF
+            .asc "TACKLE YOU BUT IT'S",LF,"TOO LATE. yOU NOTICE",LF
+            .asc "A MAGNIFICENT FUTURE",LF,"CITYSCAPE FOR ONLY A",LF
+            .asc "MOMENT BEFORE THE",LF,"bUBBLE COLLAPSES",LF
+            .asc "AROUND YOU AND YOU",LF,"STOP EXISTING.",EOL,EOL
 aX:         .asc CLRHOME,"yOU DIAL THE YEAR ON",LF,"THE CONSOLE.",LF,LF
             .asc "tHE CURSOR'S WHEELS",LF,"SPIN FASTER. yOU FEEL",LF
             .asc "A HOT LOUD RUSH OF",LF,"AIR LIKE A LOCOMOTIVE",LF
@@ -1091,9 +1173,10 @@ aJeffOffer: .asc "'i INVENTED THIS DESK",LF,"AND i'M NOT GOING TO",LF
             .asc "EXCELLENT DESK!'",EOL,"'i BID YOU GOOD DAY.'",EOL
 aJeffDecl:  .asc "'i HAVE ABSOLUTELY NO",LF,"INTEREST IN THAT.'",EOL
             .asc "nOBODY TO SWAP WITH!",EOL
-aJeffAcc:   .asc "'tHE LIGHT! tHE",LF,"SOUND! wE HAVE A",LF
-            .asc "DEAL! i CAN HAVE A",LF,"NICE TABLE BROUGHT",LF
-            .asc "UPSTAIRS TO FINISH",LF,"THIS THING.'",LF,LF
+aJeffAcc:   .asc "'wHAT A MARVELOUS",LF,"THING! i DARESAY WE",LF
+            .asc "HAVE A DEAL.",LF,LF,"'i'LL HAVE A TABLE",LF
+            .asc "BROUGHT UP SO i CAN",LF,"FINISH THIS OTHER",LF
+            .asc "PROJECT.'",LF,LF
             .asc "jEFFERSON HANDS",LF,"YOU HIS DESK.",EOL,EOL
 aNeedTix:   .asc "fRECKLE-FACED KID AT",LF,"THE COUNTER STOPS",LF
             .asc "YOU. 'yOU NEED A",LF,"TICKET TO GET IN!'",EOL
@@ -1106,9 +1189,8 @@ aBallHit:   .asc "yOU HEAR THE CRACK",LF,"OFF rUTH'S BAT AND",LF
             .asc "SEE THE BALL HEADING",LF,"RIGHT AT YOU. yOU",LF
             .asc "KNEW EXACTLY WHERE TO",LF,"BE...",EOL
             .asc "tHE GAME GOES ON.",EOL
-aNoCatch:   .asc "yOU HAD YOUR CHANCE.",LF,"yOU MISSED IT. lET IT",LF,
-            .asc "GO.",EOL,EOL
-aCatch:     .asc "wITH A SATISFYING",LF,"THUD, THE BALL PLANTS",LF
+aMissed:    .asc "tHAT MOMENT'S PASSED.",LF,"lET IT GO",EOL,EOL
+aTryCatch:  .asc "wITH A SATISFYING",LF,"THUD, THE BALL PLANTS",LF
             .asc "ITSELF IN THE",LF,"PILFERED GLOVE. fANS",LF
             .asc "EYE YOU SUSPICIOUSLY.",LF,LF,"yOU... BETTER GET OUT",LF
             .asc "OF HERE.",EOL
@@ -1118,5 +1200,10 @@ aCatch:     .asc "wITH A SATISFYING",LF,"THUD, THE BALL PLANTS",LF
             .asc "fIELD.",EOL
 aToJail:    .asc "a LITTLE KID CRIES",LF,"AND POINTS AT YOU,",LF
             .asc "'sTOLE MY GLOVE!'",LF,LF,"cROWD DISAPPROVES,",LF
-            .asc "AND SO DO dETROIT'S'",LF,"fINEST...",EOL,EOL
-            
+            .asc "AND SO DO dETROIT'S",LF,"fINEST...",EOL,EOL
+aOpSarc:    .asc "dID YOU MISS THE PART",LF,"ABOUT THE GRANITE?",LF
+            .asc "tHE LID ALONE WEIGHS",LF,"SEVERAL THOUSAND KG,",LF
+            .asc "AND IT'S NOT WHAT",LF,"YOU'RE HERE FOR",LF
+            .asc "ANYWAY.",EOL,EOL
+
+
