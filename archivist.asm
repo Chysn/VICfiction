@@ -951,15 +951,15 @@ rAnteCh:    .asc "aNTECHAMBER",EOL,"tOMB OF nEFERTARI,",LF
             .asc "vALLEY OF THE qUEENS,",LF,"lUXOR.",LF,LF
             .asc "tHE SMARTPHONE HAS",LF,"ENOUGH ILLUMINATION",LF
             .asc "FOR YOU TO FIND YOUR",LF,"WAY, AND FOR YOU TO",LF
-            .asc "APPRECIATE THE RICHLY",LF,"COLORED illustrations",LF
+            .asc "APPRECIATE THE RICHLY",LF,"COLORED ILLUSTRATIONS",LF
             .asc "THAT COVER THE WALLS.",EOL
 rSideCh:    .asc "sIDE cHAMBER",EOL,"tO THE RIGHT OF THE",LF
             .asc "aNTECHAMBER IS THE",LF,"MUCH SMALLER sIDE",LF
-            .asc "cHAMBER. cOLORFUL",LF,"illustrations COVER",LF
+            .asc "cHAMBER. cOLORFUL",LF,"ILLUSTRATIONS COVER",LF
             .asc "EACH WALL,A DIFFERENT",LF,"STYLE ON EVERY",LF
             .asc "SURFACE.",EOL
 rRamp:      .asc "rAMP",EOL,"tHIS DARK, STEEP RAMP",LF,"HEADS DOWN TO A LARGE"
-            .asc "CHAMBER.",EOL
+            .asc LF,"CHAMBER.",EOL
 rSarcRm:    .asc "sARCOPHAGUS rOOM",EOL,"hELLO",EOL
 rWAnnex:    .asc "wESTERN aNNEX",EOL,EOL
 rEAnnex:    .asc "eASTERN aNNEX",EOL,EOL
@@ -1065,7 +1065,7 @@ iSarc:      .asc "sarcophagus",EOL,"nEFERTARI'S FINAL",LF
             .asc "AT THE CEILING.",EOL
 iIllus:     .asc EOL,"tHEY JUST CAN'T BE",LF,"ADEQUATELY EXPRESSED",LF
             .asc "IN THIS MEDIUM. iF",LF,"YOU'RE STUCK IN THE",LF
-            .asc "21st CENTURY, TRY",LF,"gOOGLE.",EOL
+            .asc "21ST CENTURY, TRY",LF,"gOOGLE.",EOL
 
 ; Actions
 ;   ActVerb    - The Verb ID for this action
@@ -1201,9 +1201,6 @@ aTryCatch:  .asc "wITH A SATISFYING",LF,"THUD, THE BALL PLANTS",LF
 aToJail:    .asc "a LITTLE KID CRIES",LF,"AND POINTS AT YOU,",LF
             .asc "'sTOLE MY GLOVE!'",LF,LF,"cROWD DISAPPROVES,",LF
             .asc "AND SO DO dETROIT'S",LF,"fINEST...",EOL,EOL
-aOpSarc:    .asc "dID YOU MISS THE PART",LF,"ABOUT THE GRANITE?",LF
+aOpSarc:    .asc "dID YOU MISS THE BIT",LF,"ABOUT THE GRANITE?",LF
             .asc "tHE LID ALONE WEIGHS",LF,"SEVERAL THOUSAND KG,",LF
-            .asc "AND IT'S NOT WHAT",LF,"YOU'RE HERE FOR",LF
-            .asc "ANYWAY.",EOL,EOL
-
-
+            .asc "AND IT'S NOT WHAT",LF,"YOU'RE HERE FOR.",EOL,EOL
