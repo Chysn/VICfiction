@@ -1,0 +1,6 @@
+#!/bin/bash
+
+xa -M -O PETSCII -l toc -o ./vic/marooned.bin ./src/VICfiction.asm ./src/Marooned.story.asm
+printf "\x00\x20" | cat - ./vic/marooned.bin > ./vic/marooned.prg
+cp ./vic/marooned.prg ~/vic20/marooned
+
