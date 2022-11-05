@@ -50,7 +50,7 @@ COL         = $b2               ; Column number
 PRPTR       = $b3               ; Printer pointer
 RM          = $fb               ; Room address (2 bytes)
 DIR         = $fd               ; Direction name pointer (2 bytes)
-BUFFER      = $0220             ; Input buffer
+BUFFER      = $0200             ; Input buffer
 
 ; Saved Memory Locations
 GAME_DATA   = $1d00             ; Entirety of game data (256 bytes)
@@ -165,14 +165,18 @@ NewStory:   lda #SCRCOL         ; Set screen color
             lda #$80            ;   $80 here means "in inventory"
             sta ITEM_ROOM-1,y   ;   ,,
             bmi loop            ;   (unconditional because of lda #$80 above)
-printro:    lda #<Intro         ; Show intro
+printro:    lda #147            ; Clear Screen
+            jsr CHROUT          ; ,,
+            jsr NormCol         ; Set normal color for intro text
+            lda #<Intro         ; Show intro
             ldy #>Intro         ; ,,
             jsr PrintMsg        ; ,,
             lda #1              ; Initialize starting room
             sta CURR_ROOM       ;   ,, (Set room to 1 to avoid unwanted followers)
             jsr MoveTo          ;   ,,
             inc SEEN_ROOM       ;   and mark as seen
-            jmp EntryPt         ; Show room name before game starts
+            jsr Linefeed        ; Show room name before game starts
+            jmp EntryPt         ; ,,
                  
 ; Verb Not Found
 ; Show an error message, then go back for another command 
@@ -204,7 +208,7 @@ ch_eol:     cmp #LF             ; Did user press RETURN?
             and #$7f            ; Make case-insensitive
             sta BUFFER,x        ; Store in buffer at the index
             inx                 ; Next character
-            cpx #21             ; Prevent buffer overflow
+            cpx #88             ; Prevent buffer overflow
             bcc loop            ; ,,  
 enter:      jsr CHROUT          ; Print the RETURN
             lda #0              ; Add the line-ending null            
@@ -229,13 +233,13 @@ ch_sp:      ldx #0              ; Discard leading spaces
             beq Main            ; Drop to next line if no input
             lda GAMEOVER        ; If game is over, allow only system
             bne Main            ;   commands
+            jsr Linefeed        ; Always a linefeed after a command
             ; Fall through to Transcribe
 
 ; Transcribe Text Buffer
-;   to Verb ID and Item ID
-Transcribe: ldx #0              ; Buffer index
-            jsr GetPattern      ; Find the first two-character pattern
-            jsr GetVerbID       ; Use the pattern to get Verb ID from database
+;   to Verb ID and Item ID. The first pattern is already in PATTERN
+;   from above.
+Transcribe: jsr GetVerbID       ; Use the pattern to get Verb ID from database
             bcc NoVerb          ; Show an error if verb not found
             jsr GetPattern      ; Find the next two-character pattern
             jsr GetItemID       ; Use the pattern to get Item ID from database
@@ -244,8 +248,7 @@ Transcribe: ldx #0              ; Buffer index
 ; Story Action Lookup
 ; Start with the Action Engine. Look through the Story Actions for 
 ; matching commands and execute them.            
-StoryAct:   jsr Linefeed
-            ldx #$ff            ; Look for actions for this command's verb
+StoryAct:   ldx #$ff            ; Look for actions for this command's verb
 next_act:   inx                 ; ,,
             lda ActVerb,x       ; ,,
             bne have_verb       ; After story actions
@@ -292,26 +295,27 @@ ch_excl:    lda ActInvExcl,x    ; Is there an item exclusion?
 failure:    sec                 ; FAILURE!
             ror ACT_FAILURE     ; Set the action failure flag
             bit ACT_SUCCESS     ; If a previous success message was shown,
-            bmi eval_r1          ;   suppress the failure message
+            bmi eval_r1         ;   suppress the failure message
             lda ActResTxtH,x    ; Show the failure message for the action
             beq eval_r1         ;   ,, (If high byte=0, it's a silent failure)
             tay                 ;   ,,
             lda ActResTxtL,x    ;   ,,
             jsr PrintAlt        ;   ,,
-            jmp Linefeed        ;   ,,
 eval_r1:    rts                 ; (nearby RTS to be in-bounds)
-success:    sec                 ; SUCCESS!
-            ror ACT_SUCCESS     ; Set the action success flag
-            ldy CURR_ROOM       ; If a successful action happens in a room,
+success:    ldy CURR_ROOM       ; SUCCESS! If a successful action happens,
             lda #1              ;   mark the room as "seen" to avoid duplicate
             sta SEEN_ROOM-1,y   ;   triggers
             lda ActResTxtH,x    ; Show the success message for the action
-            beq do_result       ;   ,, (If high byte=0, it's a silent success)
-            tay                 ;   ,,
+            beq ch_timer        ;   ,, (If high byte=0, it's a silent success)
+            bit ACT_SUCCESS     ; If there has been a previous success for the
+            bpl first_succ      ;   current command, print a linefeed for the
+            pha                 ;   display of the second (and third, etc.)
+            jsr Linefeed        ;   success.
+            pla                 ;   ,,
+first_succ: tay                 ; Y is the high byte of the success message
             lda ActResTxtL,x    ;   ,,
             jsr PrintMsg        ;   ,,
-            jsr Linefeed        ;   ,,
-            lda ActTimer,x      ; Is a timer associated with this action?
+ch_timer:   lda ActTimer,x      ; Is a timer associated with this action?
             beq do_result       ; If not, perform the action result
             bmi set_timer       ; Bit 7 set means set the timer
             tay                 ; Bit 7 clear means clear the timer
@@ -324,7 +328,9 @@ set_timer:  and #$7f            ; Mask away bit 7
             bne do_result       ;   If so, do result
             lda TimerInit-1,y   ; Get timer init value
             sta TIMER-1,y       ; Initialize the timer
-do_result:  lda ActFrom,x       ; Now for the result. Get the From ID
+do_result:  sec                 ; Set the action success flag
+            ror ACT_SUCCESS     ; ,,
+            lda ActFrom,x       ; Now for the result. Get the From ID
             bne is_from         ;   Is there a From ID?
             bmi eval_r          ;   If high bit of FROM is set, message only
             lda ActTo,x         ; If there's no From ID, is there a To ID?
@@ -499,18 +505,17 @@ try_move:   lda (RM),y          ; Get the room id at the found index
             jsr MoveTo          ; Set room address (RM) and CURR_ROOM            
 EntryPt:    lda #COL_ROOM       ; Always show room name after move
             jsr CHROUT          ; ,,
-            jsr Linefeed        ; ,,
             jsr RoomName        ; ,,
             jsr PrintMsg        ; ,,
-            jsr Linefeed        ; ,,
             bit ACT_SUCCESS     ; If a room action was successful, don't
             bmi go_r            ;   show anything further
 ch_first:   ldx CURR_ROOM       ; Is this the first time this room has been
             lda SEEN_ROOM-1,x   ;   visited?
             bne go_r            ; Already been visitied, so leave
-            jsr RoomDesc        ; Show room description
+            jsr Linefeed        ; Show room description
+            jsr RoomDesc        ; ,,
             jmp Main         
-invalid:    jmp ShowErr         ; Like NoVerb  , but don't look at shortcuts
+invalid:    jmp ShowErr         ; Like NoVerb, but don't look at shortcuts
 go_fail:    jsr IsLight         ; Failed to move. If there's light in the room
             bcs sees_path       ;   the player can see that they've moved
             jsr Linefeed        ; If it's dark, simply complain about it
@@ -980,9 +985,11 @@ PrintAlt:   jsr NextMsg
 ; Print the first message at the specified address 
 ; 
 ; This print routine formats text for the VIC-20 screen. It's more complex
-; than the BASIC routine at $CB1E, but I considered it worth it, as it
+; than using the BASIC routine at $CB1E, but I considered it worth it, as it
 ; greatly improves the experience of authoring.
-PrintMsg:   sta PRPTR           ; Set zero-page print pointer
+PrintMsg:   cpy #0              ; If the high byte is 0, just return
+            beq p_r             ; ,,
+            sta PRPTR           ; Set zero-page print pointer
             sty PRPTR+1         ; ,,
             txa                 ; Save X as iterator
             pha                 ; ,,
@@ -993,7 +1000,7 @@ PrintMsg:   sta PRPTR           ; Set zero-page print pointer
             bne next_ltr        ;   end this message without doing anything
             pla                 ;   ,,
             tax                 ;   ,,
-            rts                 ;   ,,
+p_r:        rts                 ;   ,,
 next_ltr:   lda (PRPTR),y       ; Get character
             beq delimiter       ; End of string
             cmp #' '            ; End of word

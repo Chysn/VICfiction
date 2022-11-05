@@ -47,7 +47,7 @@ AltDir:     .asc 'duspaf'       ; Maritime directions
 ; STORY-SPECIFIC MESSAGES
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;            
 ; Text - Game Messages, Errors, etc.
-Intro:      .asc 147,COL_NORM,"The sun beats down on you. You don't remember "
+Intro:      .asc "The sun beats down on you. You don't remember "
             .asc "much, but you clearly made your crew pretty mad.",LF,LF
             .asc 156,"Marooned",LF,LF,"Sample Game for VICfiction Engine",ED
 NoVerbTx:   .asc COL_ALERT,"No need to do that.",ED
@@ -251,31 +251,31 @@ iShoe:      .asc "Blue SHOE",ED,"Converse All-Star size 13.",ED
 ; actions triggered by events (timer target, enters-room, score target)
 ;
 ; Qualification
-ActVerb:    .byte  13,  13,   7,   8,   9,  14,  10,  10,  11,  12,   3, ED
+ActVerb:    .byte  13,  13,   7,   8,   9,  14,  10,  10,  11,  12,   3, EV, ED
 
-ActItem:    .byte   3,   3,   0,   0,   1,   7,   0,   0,  11,  10,  10
+ActItem:    .byte   3,   3,   0,   0,   1,   7,   0,   0,  11,  10,  10,  0
 
-ActInRoom:  .byte   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+ActInRoom:  .byte   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0
 
 ; Evaluation
-ActInvCon:  .byte   9,   9,   0,   8,   1,   7,   0,   0,   0,   0,   0
+ActInvCon:  .byte   9,   9,   0,   8,   1,   7,   0,   0,   0,   0,   0,  0
 
-ActRoomCon: .byte   0,   0,   0,   6,   0,   0,   5,   5,   0,  10,  10
+ActRoomCon: .byte   0,   0,   0,   6,   0,   0,   5,   5,   0,  10,  10,  0
 
-ActInvExcl: .byte   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+ActInvExcl: .byte   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0
 
 ; Result
-ActFrom:    .byte   1,   3,   0,   6,   1,   5,  11,   5,   0,   0,   0
+ActFrom:    .byte   1,   3,  TE,   6,   1,   5,  11,   5,   0,  TE,  TE, TE
 
-ActTo:      .byte   0,   4,   0,   7,   2,   0, $82,  12,   5,   0,   0
+ActTo:      .byte   0,   4,  TE,   7,   2,   0, $82,  12,   5,  TE,  TE, TE
 
-ActTimer:   .byte   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0
+ActTimer:   .byte   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0
 
 ActResTxtL: .byte <aOpen,0,<aSwim,<aDig,<aDrink,<aRubLamp,<aWish,0
-            .byte <aBoard,<aAnchor,<aAnchor
+            .byte <aBoard,<aAnchor,<aAnchor,<aDie
 
 ActResTxtH: .byte >aOpen,0,>aSwim,>aDig,>aDrink,>aRubLamp,>aWish,0
-            .byte >aBoard,>aAnchor,>aAnchor
+            .byte >aBoard,>aAnchor,>aAnchor,>aDie
             
 ; Action Text
 ; By convention, action text begins with lowercase a. The first PETSCII
@@ -301,6 +301,7 @@ aBoard:     .asc "You climb aboard the boat, excited about what it might mean "
             .asc "for your survival!",ED,"That's not possible.",ED
 aAnchor:    .asc "Heave ho and weigh the anchor. The little boat starts "
             .asc "moving. You save vengeance for later; today you live!",ED,ED
+aDie:       .asc "You die of thirst!",ED,ED
                         
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; TIMERS
@@ -325,11 +326,11 @@ aAnchor:    .asc "Heave ho and weigh the anchor. The little boat starts "
 ; TimerInit value to ED (0) as a delimiter.
 ;
 ; Timers are 1-indexed, and timer #1 is the Clock
-TimerInit:  .asc ED
+TimerInit:  .asc 1, ED
 TimerRoom:  .asc 1
 TimerTrig:  .asc 0
 TimerTest:  .asc 0
-TimerAct:   .asc 0
+TimerAct:   .asc 11
 TimerDir:   .asc $01 ; Timer 0 direction ($01 = +1, $ff = -1)
-TimerTgt:   .asc 240 ; Timer 0 target (at which action happens)
-TimerOffst: .asc 9   ; Display time offset for Timer 1
+TimerTgt:   .asc 20  ; Timer 0 target (at which action happens)
+TimerOffst: .asc 0   ; Display time offset for Timer 1
