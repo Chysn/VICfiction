@@ -198,7 +198,7 @@ iShoe:      .asc "Blue SHOE",ED,"Converse All-Star size 13.",ED
 ;                action. If 0, no item needs to be held.
 ;   ActRoomCon - The Item ID must be in this room for success in this action.
 ;                If 0, the action is not conditioned on this item. If both 
-;                ActHoldCon and ActRoomCon are non-0, then both conditions must
+;                ActInvCon and ActRoomCon are non-0, then both conditions must
 ;                be met for the action to be successful. Note that this item may
 ;                be in inventory.
 ;   ActInvExcl - The player must NOT be holding this Item ID for success in this
